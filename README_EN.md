@@ -87,6 +87,22 @@ The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh` and, if ne
 
 ---
 
+## 🧩 systemd Services (Autostart)
+
+To start webui and USB mode automatically after boot, use:
+
+```bash
+chmod +x tools/setup_webui.sh
+sudo tools/setup_webui.sh ~/cnc-control
+
+chmod +x tools/setup_usb_service.sh
+sudo tools/setup_usb_service.sh ~/cnc-control
+```
+
+The scripts create `cnc-webui.service` and `cnc-usb.service`, enable autostart, and restart the services.
+
+---
+
 ## 📁 Repository Structure
 
 ```
@@ -99,6 +115,8 @@ cnc-control/
 ├── usb_mode.sh
 ├── tools/
 │   ├── setup_commands.sh
+│   ├── setup_usb_service.sh
+│   ├── setup_webui.sh
 │   ├── setup_nmtui.sh
 │   └── setup_zerotier.sh
 └── webui/
@@ -117,6 +135,8 @@ cnc-control/
 | `usb_mode.sh` | Switches USB mode for Raspberry Pi. |
 | `tools/` | Helper scripts for environment setup. |
 | `tools/setup_commands.sh` | Installs shortcut commands `usb_mode`, `net_mode`, `status`. |
+| `tools/setup_usb_service.sh` | Configures `cnc-usb.service` for `usb_mode.sh`. |
+| `tools/setup_webui.sh` | Configures `cnc-webui.service` for webui. |
 | `tools/setup_nmtui.sh` | Installs and launches `nmtui`. |
 | `tools/setup_zerotier.sh` | Configures the ZeroTier client. |
 | `webui/` | Simple web UI for tool access. |

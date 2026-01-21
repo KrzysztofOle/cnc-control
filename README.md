@@ -82,6 +82,22 @@ Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh` i w razie potrz
 
 ---
 
+## 🧩 Usługi systemd (autostart)
+
+Aby uruchamiać webui i tryb USB automatycznie po starcie systemu, użyj skryptów:
+
+```bash
+chmod +x tools/setup_webui.sh
+sudo tools/setup_webui.sh ~/cnc-control
+
+chmod +x tools/setup_usb_service.sh
+sudo tools/setup_usb_service.sh ~/cnc-control
+```
+
+Skrypty tworzą jednostki `cnc-webui.service` i `cnc-usb.service`, włączają autostart i restartują usługi.
+
+---
+
 ## 📁 Struktura repozytorium
 
 ```
@@ -94,6 +110,8 @@ cnc-control/
 ├── usb_mode.sh
 ├── tools/
 │   ├── setup_commands.sh
+│   ├── setup_usb_service.sh
+│   ├── setup_webui.sh
 │   ├── setup_nmtui.sh
 │   └── setup_zerotier.sh
 └── webui/
@@ -112,6 +130,8 @@ cnc-control/
 | `usb_mode.sh` | Przełączanie trybu USB dla Raspberry Pi. |
 | `tools/` | Skrypty pomocnicze do konfiguracji środowiska. |
 | `tools/setup_commands.sh` | Instalacja komend skrótowych `usb_mode`, `net_mode`, `status`. |
+| `tools/setup_usb_service.sh` | Konfiguracja usługi `cnc-usb.service` dla `usb_mode.sh`. |
+| `tools/setup_webui.sh` | Konfiguracja usługi `cnc-webui.service` dla webui. |
 | `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |
 | `tools/setup_zerotier.sh` | Konfiguracja klienta ZeroTier. |
 | `webui/` | Prosty interfejs WWW do obsługi narzędzi. |
