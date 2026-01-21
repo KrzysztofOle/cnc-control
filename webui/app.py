@@ -3,7 +3,18 @@ import subprocess
 import os
 
 app = Flask(__name__)
-UPLOAD_DIR = "/mnt/cnc_usb"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(BASE_DIR)
+USB_MOUNT = os.environ.get("CNC_USB_MOUNT", "/mnt/cnc_usb")
+UPLOAD_DIR = USB_MOUNT
+NET_MODE_SCRIPT = os.environ.get(
+    "CNC_NET_MODE_SCRIPT",
+    os.path.join(REPO_ROOT, "net_mode.sh"),
+)
+USB_MODE_SCRIPT = os.environ.get(
+    "CNC_USB_MODE_SCRIPT",
+    os.path.join(REPO_ROOT, "usb_mode.sh"),
+)
 
 HTML = """
 <!doctype html>
@@ -77,12 +88,12 @@ def index():
 
 @app.route("/net", methods=["POST"])
 def net():
-    subprocess.call(["/home/andrzej/net_mode.sh"])
+    subprocess.call([NET_MODE_SCRIPT])
     return redirect(url_for("index"))
 
 @app.route("/usb", methods=["POST"])
 def usb():
-    subprocess.call(["/home/andrzej/usb_mode.sh"])
+    subprocess.call([USB_MODE_SCRIPT])
     return redirect(url_for("index"))
 
 @app.route("/upload", methods=["POST"])

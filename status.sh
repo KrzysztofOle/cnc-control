@@ -1,7 +1,9 @@
 #!/bin/bash
 
-IMG="/home/andrzej/usb/cnc_usb.img"
-MOUNT="/mnt/cnc_usb"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}" && pwd)"
+IMG="${CNC_USB_IMG:-${REPO_ROOT}/usb/cnc_usb.img}"
+MOUNT="${CNC_USB_MOUNT:-/mnt/cnc_usb}"
 
 echo "=============================="
 echo " CNC USB STATUS"
