@@ -3,6 +3,14 @@ set -euo pipefail
 
 # --- poprawka: skrypt przygotowania nmtui i polecenia wifi — 2026-01-21T18:42:28+01:00 ---
 
+#
+# Skrypt do uruchomienia nmtui z uprawnieniami roota przez sudo bez hasła.
+#
+# Użycie:
+#   sudo ./tools/setup_nmtui.sh
+#
+
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Uruchom skrypt z sudo, np.: sudo ./tools/setup_nmtui.sh" >&2
   exit 1
