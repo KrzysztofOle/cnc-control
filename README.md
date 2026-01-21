@@ -73,13 +73,34 @@ python main.py
 
 ```
 cnc-control/
-├── main.py
-├── requirements.txt
-├── scripts/
-├── config/
-├── docs/
-└── README.md
+├── AGENTS.md
+├── README.md
+├── README_EN.md
+├── net_mode.sh
+├── status.sh
+├── usb_mode.sh
+├── tools/
+│   ├── setup_nmtui.sh
+│   └── setup_zerotier.sh
+└── webui/
+    └── app.py
 ```
+
+### 📄 Pliki i katalogi
+
+| Plik/Katalog | Opis |
+|---|---|
+| `AGENTS.md` | Zasady współpracy i dokumentacji w projekcie. |
+| `README.md` | Dokumentacja bazowa w języku polskim. |
+| `README_EN.md` | Dokumentacja pomocnicza w języku angielskim. |
+| `net_mode.sh` | Przełączanie trybu sieciowego (host/gadget). |
+| `status.sh` | Szybki podgląd stanu systemu/połączeń. |
+| `usb_mode.sh` | Przełączanie trybu USB dla Raspberry Pi. |
+| `tools/` | Skrypty pomocnicze do konfiguracji środowiska. |
+| `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |
+| `tools/setup_zerotier.sh` | Konfiguracja klienta ZeroTier. |
+| `webui/` | Prosty interfejs WWW do obsługi narzędzi. |
+| `webui/app.py` | Aplikacja webowa (serwer) dla webui. |
 
 ---
 

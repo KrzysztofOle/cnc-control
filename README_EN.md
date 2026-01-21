@@ -78,13 +78,34 @@ Detailed runtime parameters are documented directly in the source code.
 
 ```
 cnc-control/
-├── main.py            # application entry point
-├── requirements.txt   # Python dependencies
-├── scripts/           # helper scripts
-├── config/            # configuration files
-├── docs/              # technical documentation
-└── README.md
+├── AGENTS.md
+├── README.md
+├── README_EN.md
+├── net_mode.sh
+├── status.sh
+├── usb_mode.sh
+├── tools/
+│   ├── setup_nmtui.sh
+│   └── setup_zerotier.sh
+└── webui/
+    └── app.py
 ```
+
+### 📄 Files and Directories
+
+| File/Directory | Description |
+|---|---|
+| `AGENTS.md` | Collaboration and documentation rules for the project. |
+| `README.md` | Primary documentation in Polish. |
+| `README_EN.md` | Supporting documentation in English. |
+| `net_mode.sh` | Switches network mode (host/gadget). |
+| `status.sh` | Quick status view of the system/connections. |
+| `usb_mode.sh` | Switches USB mode for Raspberry Pi. |
+| `tools/` | Helper scripts for environment setup. |
+| `tools/setup_nmtui.sh` | Installs and launches `nmtui`. |
+| `tools/setup_zerotier.sh` | Configures the ZeroTier client. |
+| `webui/` | Simple web UI for tool access. |
+| `webui/app.py` | Web application (server) for webui. |
 
 ---
 
