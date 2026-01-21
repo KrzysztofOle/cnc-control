@@ -69,6 +69,19 @@ python main.py
 
 ---
 
+## ⌨️ Komendy skrótowe (CLI)
+
+Aby uruchamiać tryby jednym poleceniem (`usb_mode`, `net_mode`, `status`), zainstaluj skróty:
+
+```bash
+chmod +x tools/setup_commands.sh
+./tools/setup_commands.sh
+```
+
+Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh` i w razie potrzeby dodaje `~/.local/bin` do `PATH` (w `~/.bashrc`).
+
+---
+
 ## 📁 Struktura repozytorium
 
 ```
@@ -80,6 +93,7 @@ cnc-control/
 ├── status.sh
 ├── usb_mode.sh
 ├── tools/
+│   ├── setup_commands.sh
 │   ├── setup_nmtui.sh
 │   └── setup_zerotier.sh
 └── webui/
@@ -97,6 +111,7 @@ cnc-control/
 | `status.sh` | Szybki podgląd stanu systemu/połączeń. |
 | `usb_mode.sh` | Przełączanie trybu USB dla Raspberry Pi. |
 | `tools/` | Skrypty pomocnicze do konfiguracji środowiska. |
+| `tools/setup_commands.sh` | Instalacja komend skrótowych `usb_mode`, `net_mode`, `status`. |
 | `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |
 | `tools/setup_zerotier.sh` | Konfiguracja klienta ZeroTier. |
 | `webui/` | Prosty interfejs WWW do obsługi narzędzi. |

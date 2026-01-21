@@ -74,6 +74,19 @@ Detailed runtime parameters are documented directly in the source code.
 
 ---
 
+## ⌨️ Shortcut Commands (CLI)
+
+To run modes with single commands (`usb_mode`, `net_mode`, `status`), install shortcuts:
+
+```bash
+chmod +x tools/setup_commands.sh
+./tools/setup_commands.sh
+```
+
+The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc`).
+
+---
+
 ## 📁 Repository Structure
 
 ```
@@ -85,6 +98,7 @@ cnc-control/
 ├── status.sh
 ├── usb_mode.sh
 ├── tools/
+│   ├── setup_commands.sh
 │   ├── setup_nmtui.sh
 │   └── setup_zerotier.sh
 └── webui/
@@ -102,6 +116,7 @@ cnc-control/
 | `status.sh` | Quick status view of the system/connections. |
 | `usb_mode.sh` | Switches USB mode for Raspberry Pi. |
 | `tools/` | Helper scripts for environment setup. |
+| `tools/setup_commands.sh` | Installs shortcut commands `usb_mode`, `net_mode`, `status`. |
 | `tools/setup_nmtui.sh` | Installs and launches `nmtui`. |
 | `tools/setup_zerotier.sh` | Configures the ZeroTier client. |
 | `webui/` | Simple web UI for tool access. |
