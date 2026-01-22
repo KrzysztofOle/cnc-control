@@ -1,6 +1,7 @@
-from flask import Flask, request, redirect, url_for, render_template_string
+from flask import Flask, request, redirect, url_for, render_template_string, send_file
 import subprocess
 import os
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +19,10 @@ USB_MODE_SCRIPT = os.environ.get(
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     "/home/andrzej/cnc-control",
+)
+WEBUI_LOG_PATH = os.environ.get(
+    "CNC_WEBUI_LOG",
+    "/var/log/cnc-control/webui.log",
 )
 
 HTML = """
@@ -45,6 +50,10 @@ button {
 <body>
 <h2>CNC USB Manager</h2>
 
+{% if message %}
+<p><b>Status:</b> {{ message }}</p>
+{% endif %}
+
 <p><b>Tryb:</b> {{ mode }}</p>
 
 <form action="/net" method="post">
@@ -70,6 +79,10 @@ button {
 
 <form action="/git-pull" method="post">
   <button type="submit">Git pull (aktualizacja)</button>
+</form>
+
+<form action="/download-log" method="get">
+  <button type="submit">Pobierz log</button>
 </form>
 
 <hr>
@@ -103,7 +116,8 @@ def index():
     files = []
     if not usb and os.path.isdir(UPLOAD_DIR):
         files = os.listdir(UPLOAD_DIR)
-    return render_template_string(HTML, mode=mode, files=files)
+    message = request.args.get("msg")
+    return render_template_string(HTML, mode=mode, files=files, message=message)
 
 @app.route("/net", methods=["POST"])
 def net():
@@ -117,10 +131,28 @@ def usb():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    if not is_usb_mode():
-        f = request.files["file"]
-        f.save(os.path.join(UPLOAD_DIR, f.filename))
-    return redirect(url_for("index"))
+    if is_usb_mode():
+        return redirect(url_for("index", msg="Tryb USB: upload niedostępny"))
+
+    if "file" not in request.files:
+        return redirect(url_for("index", msg="Brak pliku w żądaniu"))
+
+    f = request.files["file"]
+    if not f or f.filename == "":
+        return redirect(url_for("index", msg="Nie wybrano pliku"))
+
+    safe_name = secure_filename(f.filename)
+    if safe_name == "":
+        return redirect(url_for("index", msg="Nieprawidłowa nazwa pliku"))
+
+    try:
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        target_path = os.path.join(UPLOAD_DIR, safe_name)
+        f.save(target_path)
+    except Exception:
+        return redirect(url_for("index", msg="Błąd zapisu pliku"))
+
+    return redirect(url_for("index", msg="Upload OK"))
 
 @app.route("/restart", methods=["POST"])
 def restart():
@@ -136,6 +168,15 @@ def poweroff():
 def git_pull():
     subprocess.call(["git", "pull", "--rebase"], cwd=CONTROL_REPO_DIR)
     return redirect(url_for("index"))
+
+@app.route("/download-log", methods=["GET"])
+def download_log():
+    if not os.path.isfile(WEBUI_LOG_PATH):
+        return redirect(url_for("index", msg="Brak pliku logu"))
+    try:
+        return send_file(WEBUI_LOG_PATH, as_attachment=True)
+    except Exception:
+        return redirect(url_for("index", msg="Błąd pobierania logu"))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
