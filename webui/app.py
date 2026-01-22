@@ -15,6 +15,10 @@ USB_MODE_SCRIPT = os.environ.get(
     "CNC_USB_MODE_SCRIPT",
     os.path.join(REPO_ROOT, "usb_mode.sh"),
 )
+CONTROL_REPO_DIR = os.environ.get(
+    "CNC_CONTROL_REPO",
+    "/home/andrzej/cnc-control",
+)
 
 HTML = """
 <!doctype html>
@@ -51,6 +55,21 @@ button {
 <form action="/usb" method="post">
   <span class="indicator {{ 'green' if mode == 'USB (CNC)' else 'gray' }}"></span>
   <button type="submit">Tryb USB (CNC)</button>
+</form>
+
+<hr>
+
+<h3>System</h3>
+<form action="/restart" method="post">
+  <button type="submit">Restart</button>
+</form>
+
+<form action="/poweroff" method="post">
+  <button type="submit">Power off</button>
+</form>
+
+<form action="/git-pull" method="post">
+  <button type="submit">Git pull (aktualizacja)</button>
 </form>
 
 <hr>
@@ -101,6 +120,21 @@ def upload():
     if not is_usb_mode():
         f = request.files["file"]
         f.save(os.path.join(UPLOAD_DIR, f.filename))
+    return redirect(url_for("index"))
+
+@app.route("/restart", methods=["POST"])
+def restart():
+    subprocess.call(["sudo", "reboot"])
+    return redirect(url_for("index"))
+
+@app.route("/poweroff", methods=["POST"])
+def poweroff():
+    subprocess.call(["sudo", "poweroff"])
+    return redirect(url_for("index"))
+
+@app.route("/git-pull", methods=["POST"])
+def git_pull():
+    subprocess.call(["git", "pull", "--rebase"], cwd=CONTROL_REPO_DIR)
     return redirect(url_for("index"))
 
 if __name__ == "__main__":
