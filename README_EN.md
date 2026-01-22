@@ -103,6 +103,23 @@ The scripts create `cnc-webui.service` and `cnc-usb.service`, enable autostart, 
 
 ---
 
+## 🌍 Environment Variables
+
+You can set these in systemd units via `Environment=` or `EnvironmentFile=`. If not set, defaults are used and the app/scripts keep running.
+
+| Variable | Description | Default value | Usage |
+|---|---|---|---|
+| `CNC_USB_MOUNT` | USB mount point (G-code upload) | `/mnt/cnc_usb` | `webui/app.py`, `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_NET_MODE_SCRIPT` | Path to network mode script | `<repo>/net_mode.sh` | `webui/app.py` |
+| `CNC_USB_MODE_SCRIPT` | Path to USB mode script | `<repo>/usb_mode.sh` | `webui/app.py` |
+| `CNC_CONTROL_REPO` | Repository path (for `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
+| `CNC_WEBUI_LOG` | WebUI log file path | `/var/log/cnc-control/webui.log` | `webui/app.py` |
+| `CNC_WEBUI_SYSTEMD_UNIT` | systemd unit name for webui | `cnc-webui.service` | `webui/app.py` |
+| `CNC_WEBUI_LOG_SINCE` | Time range for `journalctl` (e.g. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
+| `CNC_USB_IMG` | USB mass storage image | `<repo>/usb/cnc_usb.img` | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+
+---
+
 ## 📁 Repository Structure
 
 ```

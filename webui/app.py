@@ -1,6 +1,15 @@
-from flask import Flask, request, redirect, url_for, render_template_string, send_file
+from flask import (
+    Flask,
+    request,
+    redirect,
+    url_for,
+    render_template_string,
+    send_file,
+    after_this_request,
+)
 import subprocess
 import os
+import tempfile
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -23,6 +32,14 @@ CONTROL_REPO_DIR = os.environ.get(
 WEBUI_LOG_PATH = os.environ.get(
     "CNC_WEBUI_LOG",
     "/var/log/cnc-control/webui.log",
+)
+WEBUI_SYSTEMD_UNIT = os.environ.get(
+    "CNC_WEBUI_SYSTEMD_UNIT",
+    "cnc-webui.service",
+)
+WEBUI_LOG_SINCE = os.environ.get(
+    "CNC_WEBUI_LOG_SINCE",
+    "24 hours ago",
 )
 
 HTML = """
@@ -171,10 +188,46 @@ def git_pull():
 
 @app.route("/download-log", methods=["GET"])
 def download_log():
-    if not os.path.isfile(WEBUI_LOG_PATH):
-        return redirect(url_for("index", msg="Brak pliku logu"))
     try:
-        return send_file(WEBUI_LOG_PATH, as_attachment=True)
+        if os.path.isfile(WEBUI_LOG_PATH):
+            return send_file(WEBUI_LOG_PATH, as_attachment=True)
+
+        # PL: Pobranie logu z systemd (journalctl) do pliku tymczasowego.
+        # EN: Fetch systemd log (journalctl) into a temporary file.
+        result = subprocess.run(
+            [
+                "journalctl",
+                "-u",
+                WEBUI_SYSTEMD_UNIT,
+                "-b",
+                "--since",
+                WEBUI_LOG_SINCE,
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return redirect(url_for("index", msg="Brak logu w systemd"))
+
+        tmp_file = tempfile.NamedTemporaryFile(
+            prefix="cnc-webui-",
+            suffix=".log",
+            delete=False,
+        )
+        with tmp_file:
+            tmp_file.write(result.stdout.encode("utf-8"))
+
+        @after_this_request
+        def cleanup_temp_file(response):
+            try:
+                os.remove(tmp_file.name)
+            except OSError:
+                pass
+            return response
+
+        return send_file(tmp_file.name, as_attachment=True)
     except Exception:
         return redirect(url_for("index", msg="Błąd pobierania logu"))
 

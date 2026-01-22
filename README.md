@@ -98,6 +98,23 @@ Skrypty tworzą jednostki `cnc-webui.service` i `cnc-usb.service`, włączają a
 
 ---
 
+## 🌍 Zmienne środowiskowe
+
+Poniższe zmienne można ustawić np. w unitach systemd przez `Environment=` albo `EnvironmentFile=`. Jeśli nie są ustawione, aplikacja/skrypty używają wartości domyślnych i działają dalej bez przerwania.
+
+| Zmienna | Opis | Domyślna wartość | Użycie |
+|---|---|---|---|
+| `CNC_USB_MOUNT` | Punkt montowania USB (upload G-code) | `/mnt/cnc_usb` | `webui/app.py`, `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_NET_MODE_SCRIPT` | Ścieżka do skryptu trybu sieciowego | `<repo>/net_mode.sh` | `webui/app.py` |
+| `CNC_USB_MODE_SCRIPT` | Ścieżka do skryptu trybu USB | `<repo>/usb_mode.sh` | `webui/app.py` |
+| `CNC_CONTROL_REPO` | Ścieżka do repo (dla `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
+| `CNC_WEBUI_LOG` | Ścieżka do pliku logu webui | `/var/log/cnc-control/webui.log` | `webui/app.py` |
+| `CNC_WEBUI_SYSTEMD_UNIT` | Nazwa unita systemd dla webui | `cnc-webui.service` | `webui/app.py` |
+| `CNC_WEBUI_LOG_SINCE` | Zakres czasu dla `journalctl` (np. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
+| `CNC_USB_IMG` | Obraz USB Mass Storage | `<repo>/usb/cnc_usb.img` | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+
+---
+
 ## 📁 Struktura repozytorium
 
 ```
