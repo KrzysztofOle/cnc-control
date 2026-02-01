@@ -80,6 +80,21 @@ Detailed runtime parameters are documented directly in the source code.
 
 ---
 
+## 🧾 Versioning
+
+Rule: **Git tag = application version**. Use **annotated tags**.
+
+Example:
+
+```bash
+git tag -a v0.1.10 -m "fast-robot"
+git push origin v0.1.10
+```
+
+The tag description is displayed in the WebUI.
+
+---
+
 ## ⌨️ Shortcut Commands (CLI)
 
 To run modes with single commands (`usb_mode`, `net_mode`, `status`), install shortcuts:

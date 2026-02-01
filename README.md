@@ -75,6 +75,21 @@ python main.py
 
 ---
 
+## 🧾 Wersjonowanie
+
+Zasada: **tag Git = wersja aplikacji**. Używaj **annotated tags**.
+
+Przykład:
+
+```bash
+git tag -a v0.1.10 -m "fast-robot"
+git push origin v0.1.10
+```
+
+Opis taga jest wyświetlany w WebUI.
+
+---
+
 ## ⌨️ Komendy skrótowe (CLI)
 
 Aby uruchamiać tryby jednym poleceniem (`usb_mode`, `net_mode`, `status`), zainstaluj skróty:

@@ -10,6 +10,9 @@ from flask import (
 import subprocess
 import os
 import tempfile
+import json
+import re
+from datetime import datetime
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -42,6 +45,8 @@ WEBUI_LOG_SINCE = os.environ.get(
     "CNC_WEBUI_LOG_SINCE",
     "24 hours ago",
 )
+APP_VERSION_FILE = os.path.join(CONTROL_REPO_DIR, ".app_version")
+SEMVER_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+].*)?$")
 HIDDEN_NAMES = {
     ".Spotlight-V100",
     ".fseventsd",
@@ -133,7 +138,9 @@ body.ui-busy #loading-overlay * {
   </div>
 </div>
 
-<h2>CNC USB Manager</h2>
+<h2>
+  CNC USB Manager{% if app_version %} {{ app_version }}{% endif %}{% if app_description %} ({{ app_description }}){% endif %}
+</h2>
 
 {% if message %}
 <p><b>Status:</b> {{ message }}</p>
@@ -361,17 +368,140 @@ def is_hidden_file(name):
     return name.startswith(".") or name in HIDDEN_NAMES
 
 
+def log_webui_event(message):
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    log_line = f"[{timestamp}] {message}\n"
+    try:
+        log_dir = os.path.dirname(WEBUI_LOG_PATH)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        with open(WEBUI_LOG_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(log_line)
+    except OSError:
+        app.logger.warning("Nie mozna zapisac do CNC_WEBUI_LOG: %s", WEBUI_LOG_PATH)
+
+
+def run_git_command(args, cwd, label):
+    result = subprocess.run(
+        args,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    log_webui_event(f"{label} (rc={result.returncode}) stdout='{stdout}' stderr='{stderr}'")
+    return result, stdout, stderr
+
+
+def read_app_version():
+    if not os.path.isfile(APP_VERSION_FILE):
+        return None
+    try:
+        with open(APP_VERSION_FILE, "r", encoding="utf-8") as version_file:
+            data = json.load(version_file)
+        version = data.get("version")
+        description = data.get("description", "")
+        if not version:
+            return None
+        return {"version": version, "description": description or ""}
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def write_app_version(version, description):
+    data = {"version": version, "description": description or ""}
+    with open(APP_VERSION_FILE, "w", encoding="utf-8") as version_file:
+        json.dump(data, version_file, ensure_ascii=True, indent=2)
+        version_file.write("\n")
+
+
+def get_fallback_version():
+    result, stdout, stderr = run_git_command(
+        ["git", "describe", "--tags", "--dirty", "--always"],
+        CONTROL_REPO_DIR,
+        "git describe --tags --dirty --always",
+    )
+    if result.returncode != 0:
+        app.logger.error("Blad git describe: %s", stderr)
+        return {"version": None, "description": ""}
+    return {"version": stdout, "description": ""}
+
+
+def get_app_version():
+    version_data = read_app_version()
+    if version_data:
+        return version_data
+    return get_fallback_version()
+
+
+def get_latest_semver_tag():
+    result, stdout, stderr = run_git_command(
+        ["git", "tag", "--sort=-v:refname"],
+        CONTROL_REPO_DIR,
+        "git tag --sort=-v:refname",
+    )
+    if result.returncode != 0:
+        return None, f"Blad git tag: {stderr or stdout}"
+    tags = [line.strip() for line in stdout.splitlines() if line.strip()]
+    for tag in tags:
+        if SEMVER_TAG_RE.match(tag):
+            return tag, None
+    return None, "Brak tagow semver w repozytorium"
+
+
+def get_tag_description(tag):
+    result, stdout, stderr = run_git_command(
+        ["git", "tag", "-l", tag, "-n99"],
+        CONTROL_REPO_DIR,
+        f"git tag -l {tag} -n99",
+    )
+    if result.returncode != 0:
+        return None, f"Blad pobierania opisu taga: {stderr or stdout}"
+    first_line = ""
+    for line in stdout.splitlines():
+        if line.strip():
+            first_line = line.strip()
+            break
+    if not first_line:
+        return "", None
+    if first_line.startswith(tag):
+        description = first_line[len(tag):].strip()
+        return description, None
+    return "", None
+
+
+def is_repo_dirty():
+    result, stdout, stderr = run_git_command(
+        ["git", "status", "--porcelain"],
+        CONTROL_REPO_DIR,
+        "git status --porcelain",
+    )
+    if result.returncode != 0:
+        return None, f"Blad git status: {stderr or stdout}"
+    return bool(stdout.strip()), None
+
+
 @app.route("/")
 def index():
     usb = is_usb_mode()
     mode = "USB (CNC)" if usb else "SIEĆ (UPLOAD)"
     files = []
     message = request.args.get("msg")
+    version_data = get_app_version()
     if not UPLOAD_DIR and not message:
         message = "Brak konfiguracji CNC_UPLOAD_DIR"
     if not usb and UPLOAD_DIR and os.path.isdir(UPLOAD_DIR):
         files = [name for name in os.listdir(UPLOAD_DIR) if not is_hidden_file(name)]
-    return render_template_string(HTML, mode=mode, files=files, message=message)
+    return render_template_string(
+        HTML,
+        mode=mode,
+        files=files,
+        message=message,
+        app_version=version_data.get("version"),
+        app_description=version_data.get("description"),
+    )
 
 @app.route("/net", methods=["POST"])
 def net():
@@ -423,8 +553,44 @@ def poweroff():
 
 @app.route("/git-pull", methods=["POST"])
 def git_pull():
-    subprocess.call(["git", "pull", "--rebase"], cwd=CONTROL_REPO_DIR)
-    return redirect(url_for("index"))
+    dirty, error = is_repo_dirty()
+    if error:
+        return redirect(url_for("index", msg=error))
+    if dirty:
+        return redirect(url_for("index", msg="Repozytorium ma niezacommitowane zmiany"))
+
+    fetch_result, _, fetch_err = run_git_command(
+        ["git", "fetch", "--tags"],
+        CONTROL_REPO_DIR,
+        "git fetch --tags",
+    )
+    if fetch_result.returncode != 0:
+        return redirect(url_for("index", msg=f"Blad git fetch: {fetch_err}"))
+
+    tag, tag_error = get_latest_semver_tag()
+    if tag_error:
+        return redirect(url_for("index", msg=tag_error))
+    if not tag:
+        return redirect(url_for("index", msg="Brak tagow w repozytorium"))
+
+    description, description_error = get_tag_description(tag)
+    if description_error:
+        return redirect(url_for("index", msg=description_error))
+
+    checkout_result, _, checkout_err = run_git_command(
+        ["git", "checkout", tag],
+        CONTROL_REPO_DIR,
+        f"git checkout {tag}",
+    )
+    if checkout_result.returncode != 0:
+        return redirect(url_for("index", msg=f"Blad git checkout: {checkout_err}"))
+
+    try:
+        write_app_version(tag, description)
+    except OSError:
+        return redirect(url_for("index", msg="Blad zapisu .app_version"))
+
+    return redirect(url_for("index", msg=f"Zaktualizowano do {tag}"))
 
 @app.route("/download-log", methods=["GET"])
 def download_log():
