@@ -29,7 +29,7 @@ SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 
 SERVICE_CONTENT="[Unit]
 Description=CNC USB Mode (RichAuto)
-After=network.target
+After=multi-user.target network.target
 
 [Service]
 Type=oneshot

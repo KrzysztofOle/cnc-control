@@ -32,12 +32,49 @@ The `tools/setup_system.sh` script copies the default `config/cnc-control.env.ex
 - `CNC_MOUNT_POINT` – image mount point (G-code upload).
 - `CNC_UPLOAD_DIR` – directory where WebUI writes uploaded files.
 
+## Samba (smbd only, port 445)
+
+Samba is intentionally configured in a minimal mode:
+
+- Only `smbd.service` is enabled.
+- `nmbd.service` (NetBIOS) is disabled.
+- `samba-ad-dc.service` is not used (Raspberry Pi is not a domain controller).
+- The server runs as a **standalone file server** and listens only on port 445.
+- The shared path is `/mnt/cnc_usb` (share name `cnc_usb`).
+
+### Why smbd only?
+
+Disabling NetBIOS and AD-DC services shortens boot time and reduces the number of processes and
+broadcast traffic on the network. This matters for CNC/embedded systems where fast readiness is
+more important than full network browsing features.
+
+### Performance and functional consequences
+
+- Faster boot and less CPU/RAM usage (no `nmbd` or `samba-ad-dc`).
+- No NetBIOS announcements: the share may not appear automatically in "Network Neighborhood".
+  Connect directly:
+  - Windows: `\\<RPI_IP>\cnc_usb`
+  - macOS/Linux: `smb://<RPI_IP>/cnc_usb`
+
 ## Operating modes
 
 - **USB (CNC)** – Raspberry Pi exposes the image as a USB mass storage device for the controller.
 - **NET (UPLOAD)** – G-code upload over the network, without USB mode.
 
 Modes are switched by the `usb_mode.sh` and `net_mode.sh` scripts.
+
+## Boot time optimization
+
+The following choices shorten boot time and reduce unnecessary dependencies:
+
+- **cloud-init** is disabled and masked (all units) because it is not used in this CNC setup
+  and can add tens of seconds to boot time.
+- **`nmbd.service` and `samba-ad-dc.service`** are disabled because they are not required
+  for file transfer; only `smbd` remains (fewer processes and broadcasts).
+- **`NetworkManager-wait-online.service`** is disabled and masked so boot does not wait
+  for full network readiness (fast machine readiness matters more for CNC).
+- **`cnc-usb.service`** starts *after* `multi-user.target` so it does not block the base
+  system reaching the multi-user state during boot.
 
 ## Fast reboot – rules and delay causes
 

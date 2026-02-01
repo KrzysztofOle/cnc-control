@@ -32,12 +32,49 @@ Skrypt `tools/setup_system.sh` kopiuje tam domyślny plik `config/cnc-control.en
 - `CNC_MOUNT_POINT` – punkt montowania obrazu (upload G-code).
 - `CNC_UPLOAD_DIR` – katalog, do którego WebUI zapisuje pliki.
 
+## Samba (tylko smbd, port 445)
+
+Konfiguracja Samby w tym projekcie jest celowo uproszczona:
+
+- Uruchamiany jest wyłącznie `smbd.service`.
+- `nmbd.service` (NetBIOS) jest wyłączony.
+- `samba-ad-dc.service` nie jest używany (Raspberry Pi nie jest kontrolerem domeny).
+- Serwer działa w trybie **standalone file server** i nasluchuje tylko na porcie 445.
+- Udostepniany katalog to `/mnt/cnc_usb` (udzial `cnc_usb`).
+
+### Dlaczego tylko smbd?
+
+Wyłączenie NetBIOS i usług AD-DC skraca start systemu oraz zmniejsza liczbe procesow i ruchu
+rozgloszeniowego w sieci. Ma to znaczenie w systemach CNC/embedded, gdzie priorytetem jest szybka
+gotowosc do pracy, a nie pelna usluga przegladania sieci.
+
+### Konsekwencje wydajnosciowe i funkcjonalne
+
+- Szybszy boot i mniej obciazenia CPU/RAM (brak `nmbd` i `samba-ad-dc`).
+- Brak oglaszania zasobow przez NetBIOS: udzial moze nie pojawiac sie automatycznie w "Otoczeniu sieci".
+  Polacz sie bezposrednio:
+  - Windows: `\\<IP_RPI>\cnc_usb`
+  - macOS/Linux: `smb://<IP_RPI>/cnc_usb`
+
 ## Tryby pracy
 
 - **USB (CNC)** – Raspberry Pi udostępnia obraz jako pamięć masowa USB dla kontrolera.
 - **NET (UPLOAD)** – upload plików G-code przez sieć, bez trybu USB.
 
 Tryb jest przełączany przez skrypty `usb_mode.sh` i `net_mode.sh`.
+
+## Optymalizacja czasu uruchamiania
+
+Poniższe decyzje skracają boot i ograniczają niepotrzebne zależności:
+
+- **cloud-init** jest wyłączony i zamaskowany (wszystkie unity), bo w projekcie CNC
+  nie jest wykorzystywany, a potrafi opóźniać start nawet o kilkadziesiąt sekund.
+- **`nmbd.service` i `samba-ad-dc.service`** są wyłączone, bo nie są potrzebne do
+  transferu plików; pozostaje tylko `smbd` (mniej procesów i broadcastów).
+- **`NetworkManager-wait-online.service`** jest wyłączony i zamaskowany, aby boot
+  nie czekał na pełną gotowość sieci (dla CNC ważniejsza jest szybka gotowość maszyny).
+- **`cnc-usb.service`** startuje *po* `multi-user.target`, aby nie blokować osiągnięcia
+  podstawowego stanu systemu podczas bootu.
 
 ## Szybki restart systemu – zasady i przyczyny opóźnień
 
