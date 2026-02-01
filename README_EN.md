@@ -103,20 +103,43 @@ The scripts create `cnc-webui.service` and `cnc-usb.service`, enable autostart, 
 
 ---
 
-## 🌍 Environment Variables
+## ⚙️ System Configuration and Environment Variables
 
-You can set these in systemd units via `Environment=` or `EnvironmentFile=`. If not set, defaults are used and the app/scripts keep running.
+Configuration is centrally managed via:
 
-| Variable | Description | Default value | Usage |
+```
+/etc/cnc-control/cnc-control.env
+```
+
+This file is loaded by systemd (`EnvironmentFile=`) and by the mode scripts (`net_mode.sh`, `usb_mode.sh`). Missing file or required variables cause explicit errors.
+
+Quick start:
+
+```bash
+sudo mkdir -p /etc/cnc-control
+sudo cp config/cnc-control.env.example /etc/cnc-control/cnc-control.env
+sudo nano /etc/cnc-control/cnc-control.env
+```
+
+Required variables (no defaults):
+
+| Variable | Description | Default | Usage |
 |---|---|---|---|
-| `CNC_USB_MOUNT` | USB mount point (G-code upload) | `/mnt/cnc_usb` | `webui/app.py`, `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_USB_IMG` | Path to USB Mass Storage image | none (required) | `net_mode.sh`, `usb_mode.sh` |
+| `CNC_MOUNT_POINT` | Image mount point (G-code upload) | none (required) | `net_mode.sh`, `usb_mode.sh` |
+| `CNC_UPLOAD_DIR` | WebUI upload directory | none (required) | `webui/app.py` |
+
+Optional variables:
+
+| Variable | Description | Default | Usage |
+|---|---|---|---|
 | `CNC_NET_MODE_SCRIPT` | Path to network mode script | `<repo>/net_mode.sh` | `webui/app.py` |
 | `CNC_USB_MODE_SCRIPT` | Path to USB mode script | `<repo>/usb_mode.sh` | `webui/app.py` |
 | `CNC_CONTROL_REPO` | Repository path (for `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
 | `CNC_WEBUI_LOG` | WebUI log file path | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | systemd unit name for webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Time range for `journalctl` (e.g. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
-| `CNC_USB_IMG` | USB mass storage image | `<repo>/usb/cnc_usb.img` | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_USB_MOUNT` | Legacy: USB mount point | none | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
 
 ---
 
@@ -127,6 +150,7 @@ cnc-control/
 ├── AGENTS.md
 ├── README.md
 ├── README_EN.md
+├── config/
 ├── net_mode.sh
 ├── status.sh
 ├── usb_mode.sh
@@ -147,6 +171,8 @@ cnc-control/
 | `AGENTS.md` | Collaboration and documentation rules for the project. |
 | `README.md` | Primary documentation in Polish. |
 | `README_EN.md` | Supporting documentation in English. |
+| `config/` | Example configuration files. |
+| `config/cnc-control.env.example` | Example central configuration (EnvironmentFile). |
 | `net_mode.sh` | Switches network mode (host/gadget). |
 | `status.sh` | Quick status view of the system/connections. |
 | `usb_mode.sh` | Switches USB mode for Raspberry Pi. |

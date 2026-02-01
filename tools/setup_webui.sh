@@ -42,6 +42,7 @@ After=network.target local-fs.target
 [Service]
 Type=simple
 User=${RUN_AS_USER}
+EnvironmentFile=/etc/cnc-control/cnc-control.env
 WorkingDirectory=${WEBUI_DIR}
 ExecStart=${PYTHON_BIN} -u ${WEBUI_APP}
 Restart=on-failure

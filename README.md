@@ -98,20 +98,43 @@ Skrypty tworzą jednostki `cnc-webui.service` i `cnc-usb.service`, włączają a
 
 ---
 
-## 🌍 Zmienne środowiskowe
+## ⚙️ Konfiguracja systemowa i zmienne środowiskowe
 
-Poniższe zmienne można ustawić np. w unitach systemd przez `Environment=` albo `EnvironmentFile=`. Jeśli nie są ustawione, aplikacja/skrypty używają wartości domyślnych i działają dalej bez przerwania.
+Konfiguracja jest centralnie zarzadzana przez plik:
 
-| Zmienna | Opis | Domyślna wartość | Użycie |
+```
+/etc/cnc-control/cnc-control.env
+```
+
+Plik ten jest wczytywany przez systemd (`EnvironmentFile=`) oraz przez skrypty trybow (`net_mode.sh`, `usb_mode.sh`). Brak pliku lub brak wymaganych zmiennych powoduje jawny blad.
+
+Szybki start:
+
+```bash
+sudo mkdir -p /etc/cnc-control
+sudo cp config/cnc-control.env.example /etc/cnc-control/cnc-control.env
+sudo nano /etc/cnc-control/cnc-control.env
+```
+
+Wymagane zmienne (brak domyslnych wartosci):
+
+| Zmienna | Opis | Domyslna wartosc | Uzycie |
 |---|---|---|---|
-| `CNC_USB_MOUNT` | Punkt montowania USB (upload G-code) | `/mnt/cnc_usb` | `webui/app.py`, `net_mode.sh`, `usb_mode.sh`, `status.sh` |
-| `CNC_NET_MODE_SCRIPT` | Ścieżka do skryptu trybu sieciowego | `<repo>/net_mode.sh` | `webui/app.py` |
-| `CNC_USB_MODE_SCRIPT` | Ścieżka do skryptu trybu USB | `<repo>/usb_mode.sh` | `webui/app.py` |
-| `CNC_CONTROL_REPO` | Ścieżka do repo (dla `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
-| `CNC_WEBUI_LOG` | Ścieżka do pliku logu webui | `/var/log/cnc-control/webui.log` | `webui/app.py` |
+| `CNC_USB_IMG` | Sciezka do obrazu USB Mass Storage | brak (wymagane) | `net_mode.sh`, `usb_mode.sh` |
+| `CNC_MOUNT_POINT` | Punkt montowania obrazu (upload G-code) | brak (wymagane) | `net_mode.sh`, `usb_mode.sh` |
+| `CNC_UPLOAD_DIR` | Katalog uploadu z WebUI | brak (wymagane) | `webui/app.py` |
+
+Pozostale zmienne (opcjonalne):
+
+| Zmienna | Opis | Domyslna wartosc | Uzycie |
+|---|---|---|---|
+| `CNC_NET_MODE_SCRIPT` | Sciezka do skryptu trybu sieciowego | `<repo>/net_mode.sh` | `webui/app.py` |
+| `CNC_USB_MODE_SCRIPT` | Sciezka do skryptu trybu USB | `<repo>/usb_mode.sh` | `webui/app.py` |
+| `CNC_CONTROL_REPO` | Sciezka do repo (dla `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
+| `CNC_WEBUI_LOG` | Sciezka do pliku logu webui | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | Nazwa unita systemd dla webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Zakres czasu dla `journalctl` (np. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
-| `CNC_USB_IMG` | Obraz USB Mass Storage | `<repo>/usb/cnc_usb.img` | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_USB_MOUNT` | Legacy: punkt montowania USB | brak | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
 
 ---
 
@@ -122,6 +145,7 @@ cnc-control/
 ├── AGENTS.md
 ├── README.md
 ├── README_EN.md
+├── config/
 ├── net_mode.sh
 ├── status.sh
 ├── usb_mode.sh
@@ -142,6 +166,8 @@ cnc-control/
 | `AGENTS.md` | Zasady współpracy i dokumentacji w projekcie. |
 | `README.md` | Dokumentacja bazowa w języku polskim. |
 | `README_EN.md` | Dokumentacja pomocnicza w języku angielskim. |
+| `config/` | Przykladowe pliki konfiguracyjne. |
+| `config/cnc-control.env.example` | Przykklad centralnej konfiguracji (EnvironmentFile). |
 | `net_mode.sh` | Przełączanie trybu sieciowego (host/gadget). |
 | `status.sh` | Szybki podgląd stanu systemu/połączeń. |
 | `usb_mode.sh` | Przełączanie trybu USB dla Raspberry Pi. |

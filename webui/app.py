@@ -15,8 +15,9 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(BASE_DIR)
-USB_MOUNT = os.environ.get("CNC_USB_MOUNT", "/mnt/cnc_usb")
-UPLOAD_DIR = USB_MOUNT
+UPLOAD_DIR = os.environ.get("CNC_UPLOAD_DIR")
+if not UPLOAD_DIR:
+    app.logger.error("Brak zmiennej CNC_UPLOAD_DIR. Upload i lista plikow beda niedostepne.")
 NET_MODE_SCRIPT = os.environ.get(
     "CNC_NET_MODE_SCRIPT",
     os.path.join(REPO_ROOT, "net_mode.sh"),
@@ -131,9 +132,11 @@ def index():
     usb = is_usb_mode()
     mode = "USB (CNC)" if usb else "SIEĆ (UPLOAD)"
     files = []
-    if not usb and os.path.isdir(UPLOAD_DIR):
-        files = os.listdir(UPLOAD_DIR)
     message = request.args.get("msg")
+    if not UPLOAD_DIR and not message:
+        message = "Brak konfiguracji CNC_UPLOAD_DIR"
+    if not usb and UPLOAD_DIR and os.path.isdir(UPLOAD_DIR):
+        files = os.listdir(UPLOAD_DIR)
     return render_template_string(HTML, mode=mode, files=files, message=message)
 
 @app.route("/net", methods=["POST"])
@@ -148,6 +151,9 @@ def usb():
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    if not UPLOAD_DIR:
+        return redirect(url_for("index", msg="Brak konfiguracji CNC_UPLOAD_DIR"))
+
     if is_usb_mode():
         return redirect(url_for("index", msg="Tryb USB: upload niedostępny"))
 

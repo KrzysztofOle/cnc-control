@@ -1,10 +1,37 @@
 #!/bin/bash
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}" && pwd)"
-IMG="${CNC_USB_IMG:-${REPO_ROOT}/usb/cnc_usb.img}"
-MOUNT="${CNC_USB_MOUNT:-/mnt/cnc_usb}"
+ENV_FILE="/etc/cnc-control/cnc-control.env"
+if [ ! -f "${ENV_FILE}" ]; then
+    echo "Brak pliku konfiguracji: ${ENV_FILE}"
+    exit 1
+fi
+
+# shellcheck source=/etc/cnc-control/cnc-control.env
+set -a
+source "${ENV_FILE}"
+set +a
+
+if [ -z "${CNC_MOUNT_POINT:-}" ]; then
+    if [ -n "${CNC_USB_MOUNT:-}" ]; then
+        CNC_MOUNT_POINT="${CNC_USB_MOUNT}"
+    elif [ -n "${CNC_UPLOAD_DIR:-}" ]; then
+        CNC_MOUNT_POINT="${CNC_UPLOAD_DIR}"
+    fi
+fi
+
+if [ -z "${CNC_USB_IMG:-}" ]; then
+    echo "Brak zmiennej CNC_USB_IMG w konfiguracji."
+    exit 1
+fi
+
+if [ -z "${CNC_MOUNT_POINT:-}" ]; then
+    echo "Brak zmiennej CNC_MOUNT_POINT w konfiguracji."
+    exit 1
+fi
+
+IMG="${CNC_USB_IMG}"
+MOUNT="${CNC_MOUNT_POINT}"
 
 echo "[USB MODE] Przełączanie na tryb CNC (USB)..."
 
