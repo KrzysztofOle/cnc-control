@@ -38,6 +38,7 @@ RUN_AS_USER="${SUDO_USER:-$USER}"
 SERVICE_CONTENT="[Unit]
 Description=CNC Control Web UI
 After=network.target local-fs.target
+Wants=network.target
 
 [Service]
 Type=simple

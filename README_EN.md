@@ -109,6 +109,17 @@ The scripts create `cnc-webui.service` and `cnc-usb.service`, enable autostart, 
 
 ---
 
+## ⚡ Fast reboot – rules and delay causes
+
+- `network-online.target` slows boot when DHCP or networking is not ready; in CNC/embedded systems
+  this is undesirable because fast machine readiness matters more than full network initialization.
+  This project uses `network.target` only to avoid blocking startup.
+- Disable `NetworkManager-wait-online.service`, because it can impose long timeouts during boot
+  or reboot (especially without active DHCP/link):
+  `sudo systemctl disable NetworkManager-wait-online.service`.
+
+---
+
 ## ⚙️ System Configuration and Environment Variables
 
 Configuration is centrally managed via:

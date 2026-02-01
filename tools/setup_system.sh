@@ -52,5 +52,6 @@ EnvironmentFile=/etc/cnc-control/cnc-control.env
 OVERRIDE
 
 systemctl daemon-reload
+systemctl disable NetworkManager-wait-online.service
 
 echo "Gotowe. Unit zainstalowany: ${SYSTEMD_SERVICE_DEST}"

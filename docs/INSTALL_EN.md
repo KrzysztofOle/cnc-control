@@ -39,6 +39,30 @@ The `tools/setup_system.sh` script copies the default `config/cnc-control.env.ex
 
 Modes are switched by the `usb_mode.sh` and `net_mode.sh` scripts.
 
+## Fast reboot – rules and delay causes
+
+- Rebooting from WebUI in USB mode can be slow because the system must safely detach the USB gadget,
+  wait for the controller to release the bus, and flush filesystem buffers.
+- `network-online.target` slows boot when DHCP or networking is not ready; in CNC/embedded systems
+  this is undesirable because fast machine readiness matters more than full network initialization.
+  This project uses `network.target` only to avoid blocking startup.
+- Disable `NetworkManager-wait-online.service`, because it can impose long timeouts during boot
+  or reboot (especially without active DHCP/link):
+  `sudo systemctl disable NetworkManager-wait-online.service`.
+- `dwc2`, `g_mass_storage`, `g_ether` must not be enabled statically in `/boot/config.txt`
+  or `/boot/cmdline.txt` — the gadget should be loaded dynamically only by `usb_mode.sh`.
+- ZeroTier must not block boot; if its unit uses `After=network-online.target`, add an override
+  with `network.target` (e.g. `sudo systemctl edit zerotier-one`):
+
+```ini
+[Unit]
+After=network.target
+Wants=network.target
+```
+
+Recommended reboot: switch to network mode (`net_mode.sh`), wait for the image to unmount,
+then run `sudo systemctl reboot` (or `sudo reboot`) from SSH/terminal.
+
 ## Hidden system files
 
 WebUI hides entries that start with `.` and common macOS system directories

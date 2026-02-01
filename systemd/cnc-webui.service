@@ -1,6 +1,7 @@
 [Unit]
 Description=CNC Control Web UI
 After=network.target local-fs.target
+Wants=network.target
 
 [Service]
 Type=simple

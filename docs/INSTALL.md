@@ -39,6 +39,31 @@ Skrypt `tools/setup_system.sh` kopiuje tam domyślny plik `config/cnc-control.en
 
 Tryb jest przełączany przez skrypty `usb_mode.sh` i `net_mode.sh`.
 
+## Szybki restart systemu – zasady i przyczyny opóźnień
+
+- Restart z WebUI w trybie USB bywa wolny, bo system musi bezpiecznie odłączyć gadget USB,
+  odczekać na zwolnienie magistrali przez kontroler i dopisać bufory systemu plików.
+- `network-online.target` wydłuża start, gdy DHCP lub sieć nie są gotowe; w systemach CNC/embedded
+  jest to niepożądane, bo priorytetem jest szybka gotowość maszyny, a nie pełna inicjalizacja sieci.
+  W tym projekcie używamy tylko `network.target`, aby nie blokować bootu.
+- Wyłącz `NetworkManager-wait-online.service`, ponieważ potrafi trzymać długie timeouty przy starcie
+  i restarcie (zwłaszcza bez aktywnego DHCP lub linku):
+  `sudo systemctl disable NetworkManager-wait-online.service`.
+- Moduły `dwc2`, `g_mass_storage`, `g_ether` nie mogą być aktywowane statycznie w
+  `/boot/config.txt` ani `/boot/cmdline.txt` — gadget ma być ładowany wyłącznie dynamicznie
+  przez `usb_mode.sh`.
+- ZeroTier nie powinien blokować startu; jeśli jego unit ma `After=network-online.target`,
+  ustaw override na `network.target` (np. `sudo systemctl edit zerotier-one`):
+
+```ini
+[Unit]
+After=network.target
+Wants=network.target
+```
+
+Zalecany restart: przełącz na tryb sieciowy (`net_mode.sh`), odczekaj na odmontowanie obrazu,
+a następnie wykonaj `sudo systemctl reboot` (lub `sudo reboot`) z SSH/terminala.
+
 ## Ukryte pliki systemowe
 
 WebUI ukrywa w widoku listy plików pozycje zaczynające się od `.` oraz

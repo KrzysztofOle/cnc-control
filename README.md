@@ -104,6 +104,17 @@ Skrypty tworzą jednostki `cnc-webui.service` i `cnc-usb.service`, włączają a
 
 ---
 
+## ⚡ Szybki restart systemu – zasady i przyczyny opóźnień
+
+- `network-online.target` wydłuża start, gdy DHCP lub sieć nie są gotowe; w systemach CNC/embedded
+  jest to niepożądane, bo priorytetem jest szybka gotowość maszyny, a nie pełna inicjalizacja sieci.
+  W tym projekcie używamy tylko `network.target`, aby nie blokować bootu.
+- Wyłącz `NetworkManager-wait-online.service`, ponieważ potrafi trzymać długie timeouty przy starcie
+  i restarcie (zwłaszcza bez aktywnego DHCP lub linku):
+  `sudo systemctl disable NetworkManager-wait-online.service`.
+
+---
+
 ## ⚙️ Konfiguracja systemowa i zmienne środowiskowe
 
 Konfiguracja jest centralnie zarzadzana przez plik:
@@ -190,7 +201,6 @@ cnc-control/
 
 ## ⚠️ Ograniczenia i uwagi
 
-- ❌ brak bezpośredniej integracji z ctrlX PLC Engineering
 - ❌ brak modyfikacji firmware RichAuto
 - ⚠️ port USB w A11E ma ograniczoną wydajność prądową
 

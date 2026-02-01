@@ -47,6 +47,13 @@ if lsmod | grep -q g_mass_storage; then
     sudo modprobe -r g_mass_storage
 fi
 
+# PL: Upewnij sie, ze sterownik OTG (dwc2) jest ladowany dynamicznie.
+# EN: Ensure the OTG (dwc2) driver is loaded dynamically.
+if ! lsmod | grep -q '^dwc2'; then
+    echo "Ladowanie sterownika dwc2..."
+    sudo modprobe dwc2
+fi
+
 # Podłącz gadget w trybie RO
 echo "Podłączanie USB Mass Storage (RO)..."
 sudo modprobe g_mass_storage file="${IMG}" removable=1 ro=1
