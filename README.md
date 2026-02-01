@@ -61,6 +61,12 @@ pip install -r requirements.txt
 
 ---
 
+## 🧱 Instalacja systemowa
+
+Instrukcja przygotowania systemu po samym `git clone` znajduje się w `docs/INSTALL.md`.
+
+---
+
 ## ▶️ Uruchamianie
 
 ```bash

@@ -30,6 +30,7 @@ Zakres projektu:
 3. Językiem nadrzędnym zawsze jest **PL**.
 4. W przypadku rozbieżności treści, wersja **PL ma pierwszeństwo**.
 5. Cała dokumentacja musi być formatowana w **Markdown**.
+6. Opisy commitów zawsze podawaj najpierw po **angielsku**, a następnie dodaj **krótkie streszczenie po polsku**.
 
 ---
 

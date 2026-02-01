@@ -64,6 +64,12 @@ pip install -r requirements.txt
 
 ---
 
+## 🧱 System installation
+
+System setup after a fresh `git clone` is described in `docs/INSTALL_EN.md`.
+
+---
+
 ## ▶️ Running the Project
 
 ```bash

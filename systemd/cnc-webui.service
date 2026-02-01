@@ -1,0 +1,12 @@
+[Unit]
+Description=CNC Control Web UI
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+User=andrzej
+WorkingDirectory=/home/andrzej/cnc-control/webui
+ExecStart=/usr/bin/python3 -u /home/andrzej/cnc-control/webui/app.py
+
+[Install]
+WantedBy=multi-user.target
