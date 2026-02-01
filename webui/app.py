@@ -42,6 +42,11 @@ WEBUI_LOG_SINCE = os.environ.get(
     "CNC_WEBUI_LOG_SINCE",
     "24 hours ago",
 )
+HIDDEN_NAMES = {
+    ".Spotlight-V100",
+    ".fseventsd",
+    ".Trashes",
+}
 
 HTML = """
 <!doctype html>
@@ -127,6 +132,11 @@ button {
 def is_usb_mode():
     return subprocess.call("lsmod | grep -q g_mass_storage", shell=True) == 0
 
+
+def is_hidden_file(name):
+    return name.startswith(".") or name in HIDDEN_NAMES
+
+
 @app.route("/")
 def index():
     usb = is_usb_mode()
@@ -136,7 +146,7 @@ def index():
     if not UPLOAD_DIR and not message:
         message = "Brak konfiguracji CNC_UPLOAD_DIR"
     if not usb and UPLOAD_DIR and os.path.isdir(UPLOAD_DIR):
-        files = os.listdir(UPLOAD_DIR)
+        files = [name for name in os.listdir(UPLOAD_DIR) if not is_hidden_file(name)]
     return render_template_string(HTML, mode=mode, files=files, message=message)
 
 @app.route("/net", methods=["POST"])

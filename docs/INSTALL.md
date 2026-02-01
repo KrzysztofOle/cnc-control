@@ -39,6 +39,13 @@ Skrypt `tools/setup_system.sh` kopiuje tam domyślny plik `config/cnc-control.en
 
 Tryb jest przełączany przez skrypty `usb_mode.sh` i `net_mode.sh`.
 
+## Ukryte pliki systemowe
+
+WebUI ukrywa w widoku listy plików pozycje zaczynające się od `.` oraz
+typowe katalogi systemowe macOS (np. `.Spotlight-V100`, `.fseventsd`, `.Trashes`).
+Takie wpisy są bezpiecznie ignorowane wyłącznie w warstwie prezentacji
+i nie są usuwane z nośnika.
+
 ## Diagnostyka
 
 ```bash

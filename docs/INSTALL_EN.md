@@ -39,6 +39,13 @@ The `tools/setup_system.sh` script copies the default `config/cnc-control.env.ex
 
 Modes are switched by the `usb_mode.sh` and `net_mode.sh` scripts.
 
+## Hidden system files
+
+WebUI hides entries that start with `.` and common macOS system directories
+(e.g. `.Spotlight-V100`, `.fseventsd`, `.Trashes`) in the file list view.
+These entries are safely ignored in the presentation layer only and are not
+removed from the storage.
+
 ## Diagnostics
 
 ```bash
