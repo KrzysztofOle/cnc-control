@@ -67,10 +67,72 @@ button {
   padding: 6px 12px;
   margin: 4px 0;
 }
+
+body.ui-busy * {
+  pointer-events: none;
+}
+
+body.ui-busy #loading-overlay,
+body.ui-busy #loading-overlay * {
+  pointer-events: auto;
+}
+
+#loading-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 9999;
+}
+
+#loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 22px;
+  background: #ffffff;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+  min-width: 220px;
+}
+
+#loading-message {
+  font-weight: 600;
+}
+
+#loading-timeout {
+  display: none;
+  font-size: 12px;
+  color: #555555;
+}
+
+#loading-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid #d0d0d0;
+  border-top-color: #2ecc71;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 </style>
 </head>
 
 <body>
+<div id="loading-overlay" aria-hidden="true">
+  <div id="loading-card" role="status" aria-live="polite">
+    <div id="loading-spinner"></div>
+    <div id="loading-message">Trwa wykonywanie operacji...</div>
+    <div id="loading-timeout">Operacja trwa dłużej niż zwykle...</div>
+  </div>
+</div>
+
 <h2>CNC USB Manager</h2>
 
 {% if message %}
@@ -124,6 +186,168 @@ button {
   <input type=file name=file>
   <input type=submit value=Upload>
 </form>
+
+<script>
+  const overlay = document.getElementById("loading-overlay");
+  const timeoutMessage = document.getElementById("loading-timeout");
+  const messageLabel = document.getElementById("loading-message");
+  let busy = false;
+  let timeoutId = null;
+
+  function setControlsDisabled(disabled) {
+    const controls = document.querySelectorAll("button, input, select, textarea");
+    controls.forEach((control) => {
+      if (disabled) {
+        if (!control.hasAttribute("data-prev-disabled")) {
+          control.setAttribute("data-prev-disabled", control.disabled ? "1" : "0");
+        }
+        control.disabled = true;
+      } else {
+        const prev = control.getAttribute("data-prev-disabled");
+        if (prev !== null) {
+          control.disabled = prev === "1";
+          control.removeAttribute("data-prev-disabled");
+        } else {
+          control.disabled = false;
+        }
+      }
+    });
+  }
+
+  function setBusy(state, text) {
+    busy = state;
+    if (state) {
+      if (text) {
+        messageLabel.textContent = text;
+      } else {
+        messageLabel.textContent = "Trwa wykonywanie operacji...";
+      }
+      overlay.style.display = "flex";
+      overlay.setAttribute("aria-hidden", "false");
+      document.body.classList.add("ui-busy");
+      setControlsDisabled(true);
+      timeoutMessage.style.display = "none";
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      timeoutId = setTimeout(() => {
+        if (busy) {
+          timeoutMessage.style.display = "block";
+        }
+      }, 10000);
+      return;
+    }
+
+    overlay.style.display = "none";
+    overlay.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("ui-busy");
+    setControlsDisabled(false);
+    timeoutMessage.style.display = "none";
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function extractFilename(disposition) {
+    if (!disposition) {
+      return "cnc-log.log";
+    }
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    if (match && match[1]) {
+      return match[1];
+    }
+    return "cnc-log.log";
+  }
+
+  async function runAction(request) {
+    if (busy) {
+      return;
+    }
+    let replaced = false;
+    setBusy(true);
+    try {
+      const response = await fetch(request);
+      const contentType = response.headers.get("content-type") || "";
+      const disposition = response.headers.get("content-disposition") || "";
+      const isAttachment = disposition.toLowerCase().includes("attachment");
+      const isHtml = contentType.toLowerCase().includes("text/html");
+
+      if (isAttachment || !isHtml) {
+        const blob = await response.blob();
+        const filename = extractFilename(disposition);
+        downloadBlob(blob, filename);
+      } else {
+        const html = await response.text();
+        replaced = true;
+        setBusy(false);
+        document.open();
+        document.write(html);
+        document.close();
+        return;
+      }
+
+      if (!response.ok) {
+        alert("Błąd HTTP: " + response.status);
+      }
+    } catch (error) {
+      alert("Błąd połączenia: " + error);
+    } finally {
+      if (!replaced) {
+        setBusy(false);
+      }
+    }
+  }
+
+  function buildRequest(form) {
+    const action = form.action || window.location.href;
+    const method = (form.method || "GET").toUpperCase();
+    if (method === "GET") {
+      const url = new URL(action, window.location.href);
+      const formData = new FormData(form);
+      for (const [key, value] of formData.entries()) {
+        if (typeof value === "string") {
+          url.searchParams.append(key, value);
+        }
+      }
+      return new Request(url.toString(), {
+        method: "GET",
+        credentials: "same-origin",
+      });
+    }
+
+    return new Request(action, {
+      method: method,
+      body: new FormData(form),
+      credentials: "same-origin",
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const forms = document.querySelectorAll("form");
+    forms.forEach((form) => {
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (busy) {
+          return;
+        }
+        const request = buildRequest(form);
+        runAction(request);
+      });
+    });
+  });
+</script>
 
 </body>
 </html>
