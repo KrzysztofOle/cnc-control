@@ -142,10 +142,20 @@ body.ui-busy #loading-overlay * {
   CNC USB Manager{% if app_version %} {{ app_version }}{% endif %}{% if app_description %} ({{ app_description }}){% endif %}
 </h2>
 
+<p>
+  {% if page == 'system' %}
+    <a href="/">Operacje CNC</a>
+  {% else %}
+    <a href="/system">System</a>
+  {% endif %}
+</p>
+
 {% if message %}
 <p><b>Status:</b> {{ message }}</p>
 {% endif %}
 
+{% if page != 'system' %}
+<h3>Operacje CNC</h3>
 <p><b>Tryb:</b> {{ mode }}</p>
 
 <form action="/net" method="post">
@@ -156,25 +166,6 @@ body.ui-busy #loading-overlay * {
 <form action="/usb" method="post">
   <span class="indicator {{ 'green' if mode == 'USB (CNC)' else 'gray' }}"></span>
   <button type="submit">Tryb USB (CNC)</button>
-</form>
-
-<hr>
-
-<h3>System</h3>
-<form action="/restart" method="post">
-  <button type="submit">Restart</button>
-</form>
-
-<form action="/poweroff" method="post">
-  <button type="submit">Power off</button>
-</form>
-
-<form action="/git-pull" method="post">
-  <button type="submit">Git pull (aktualizacja)</button>
-</form>
-
-<form action="/download-log" method="get">
-  <button type="submit">Pobierz log</button>
 </form>
 
 <hr>
@@ -193,6 +184,37 @@ body.ui-busy #loading-overlay * {
   <input type=file name=file>
   <input type=submit value=Upload>
 </form>
+{% endif %}
+
+{% if page == 'system' %}
+<hr>
+
+<h3>System</h3>
+<form action="/restart" method="post">
+  <input type="hidden" name="next" value="system">
+  <button type="submit">Restart</button>
+</form>
+
+<form action="/poweroff" method="post">
+  <input type="hidden" name="next" value="system">
+  <button type="submit">Power off</button>
+</form>
+
+<form action="/git-pull" method="post">
+  <input type="hidden" name="next" value="system">
+  <button type="submit">Aktualizacja</button>
+</form>
+
+<form action="/git-pull-plain" method="post">
+  <input type="hidden" name="next" value="system">
+  <button type="submit">Git pull</button>
+</form>
+
+<form action="/download-log" method="get">
+  <input type="hidden" name="next" value="system">
+  <button type="submit">Pobierz log</button>
+</form>
+{% endif %}
 
 <script>
   const overlay = document.getElementById("loading-overlay");
@@ -483,6 +505,17 @@ def is_repo_dirty():
     return bool(stdout.strip()), None
 
 
+def redirect_to_next(message=None):
+    next_page = request.form.get("next") or request.args.get("next")
+    if next_page == "system":
+        if message:
+            return redirect(url_for("system", msg=message))
+        return redirect(url_for("system"))
+    if message:
+        return redirect(url_for("index", msg=message))
+    return redirect(url_for("index"))
+
+
 @app.route("/")
 def index():
     usb = is_usb_mode()
@@ -496,8 +529,23 @@ def index():
         files = [name for name in os.listdir(UPLOAD_DIR) if not is_hidden_file(name)]
     return render_template_string(
         HTML,
+        page="main",
         mode=mode,
         files=files,
+        message=message,
+        app_version=version_data.get("version"),
+        app_description=version_data.get("description"),
+    )
+
+@app.route("/system")
+def system():
+    message = request.args.get("msg")
+    version_data = get_app_version()
+    return render_template_string(
+        HTML,
+        page="system",
+        mode=None,
+        files=[],
         message=message,
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
@@ -544,20 +592,20 @@ def upload():
 @app.route("/restart", methods=["POST"])
 def restart():
     subprocess.call(["sudo", "reboot"])
-    return redirect(url_for("index"))
+    return redirect_to_next()
 
 @app.route("/poweroff", methods=["POST"])
 def poweroff():
     subprocess.call(["sudo", "poweroff"])
-    return redirect(url_for("index"))
+    return redirect_to_next()
 
 @app.route("/git-pull", methods=["POST"])
 def git_pull():
     dirty, error = is_repo_dirty()
     if error:
-        return redirect(url_for("index", msg=error))
+        return redirect_to_next(error)
     if dirty:
-        return redirect(url_for("index", msg="Repozytorium ma niezacommitowane zmiany"))
+        return redirect_to_next("Repozytorium ma niezacommitowane zmiany")
 
     fetch_result, _, fetch_err = run_git_command(
         ["git", "fetch", "--tags"],
@@ -565,17 +613,17 @@ def git_pull():
         "git fetch --tags",
     )
     if fetch_result.returncode != 0:
-        return redirect(url_for("index", msg=f"Blad git fetch: {fetch_err}"))
+        return redirect_to_next(f"Blad git fetch: {fetch_err}")
 
     tag, tag_error = get_latest_semver_tag()
     if tag_error:
-        return redirect(url_for("index", msg=tag_error))
+        return redirect_to_next(tag_error)
     if not tag:
-        return redirect(url_for("index", msg="Brak tagow w repozytorium"))
+        return redirect_to_next("Brak tagow w repozytorium")
 
     description, description_error = get_tag_description(tag)
     if description_error:
-        return redirect(url_for("index", msg=description_error))
+        return redirect_to_next(description_error)
 
     checkout_result, _, checkout_err = run_git_command(
         ["git", "checkout", tag],
@@ -583,14 +631,25 @@ def git_pull():
         f"git checkout {tag}",
     )
     if checkout_result.returncode != 0:
-        return redirect(url_for("index", msg=f"Blad git checkout: {checkout_err}"))
+        return redirect_to_next(f"Blad git checkout: {checkout_err}")
 
     try:
         write_app_version(tag, description)
     except OSError:
-        return redirect(url_for("index", msg="Blad zapisu .app_version"))
+        return redirect_to_next("Blad zapisu .app_version")
 
-    return redirect(url_for("index", msg=f"Zaktualizowano do {tag}"))
+    return redirect_to_next(f"Zaktualizowano do {tag}")
+
+@app.route("/git-pull-plain", methods=["POST"])
+def git_pull_plain():
+    result, stdout, stderr = run_git_command(
+        ["git", "pull"],
+        CONTROL_REPO_DIR,
+        "git pull",
+    )
+    if result.returncode != 0:
+        return redirect_to_next(stderr or stdout or "Blad git pull")
+    return redirect_to_next(stdout or "Git pull OK")
 
 @app.route("/download-log", methods=["GET"])
 def download_log():
@@ -615,7 +674,7 @@ def download_log():
             check=False,
         )
         if result.returncode != 0 or not result.stdout:
-            return redirect(url_for("index", msg="Brak logu w systemd"))
+            return redirect_to_next("Brak logu w systemd")
 
         tmp_file = tempfile.NamedTemporaryFile(
             prefix="cnc-webui-",
@@ -635,7 +694,7 @@ def download_log():
 
         return send_file(tmp_file.name, as_attachment=True)
     except Exception:
-        return redirect(url_for("index", msg="Błąd pobierania logu"))
+        return redirect_to_next("Błąd pobierania logu")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
