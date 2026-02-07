@@ -22,8 +22,7 @@ CLOUD_INIT_UNITS=(
     cloud-init-local.service
     cloud-init.service
     cloud-config.service
-    cloud-final.service
-    cloud-init.target
+    cloud-init-network.service
 )
 
 if ! command -v systemctl >/dev/null 2>&1; then
@@ -62,15 +61,29 @@ EnvironmentFile=/etc/cnc-control/cnc-control.env
 OVERRIDE
 
 systemctl daemon-reload
-systemctl disable --now NetworkManager-wait-online.service
-systemctl mask NetworkManager-wait-online.service
 
+# Raspberry Pi jako appliance CNC: cloud-init jest zbedny i spowalnia start.
+echo "[INFO] Wylaczanie cloud-init (uslugi i maskowanie)"
 for unit in "${CLOUD_INIT_UNITS[@]}"; do
-    if systemctl list-unit-files --type=service --type=target | grep -q "^${unit}"; then
-        systemctl disable --now "${unit}"
-        systemctl mask "${unit}"
+    if systemctl list-unit-files --type=service | grep -q "^${unit}"; then
+        echo "[INFO] Disabling ${unit}"
+        systemctl disable --now "${unit}" || true
+        echo "[INFO] Masking ${unit}"
+        systemctl mask "${unit}" || true
+    else
+        echo "[INFO] Pomijam brakujaca usluge: ${unit}"
     fi
 done
+
+echo "[INFO] Tworzenie /etc/cloud/cloud-init.disabled"
+mkdir -p /etc/cloud
+touch /etc/cloud/cloud-init.disabled
+
+# Siec jest wymagana (SSH, WebUI, Samba), ale nie moze blokowac startu systemu.
+echo "[INFO] Disabling NetworkManager-wait-online.service"
+systemctl disable --now NetworkManager-wait-online.service || true
+echo "[INFO] Masking NetworkManager-wait-online.service"
+systemctl mask NetworkManager-wait-online.service || true
 
 if command -v smbd >/dev/null 2>&1; then
     if [ -f "${SAMBA_CONF}" ]; then
