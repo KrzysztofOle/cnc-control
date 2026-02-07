@@ -119,6 +119,27 @@ Skrypty tworzą jednostki `cnc-webui.service` i `cnc-usb.service`, włączają a
 
 ---
 
+## 🌐 Konfiguracja Wi-Fi (WebUI)
+
+WebUI posiada prostą konfigurację Wi-Fi opartą o NetworkManager (`nmcli`).
+
+Wymagania:
+- zainstalowany i uruchomiony NetworkManager (usługa `NetworkManager`)
+- reguły sudo dla `nmcli` (bez hasła) dla użytkownika uruchamiającego WebUI
+- WebUI uruchamiaj jako zwykły użytkownik (nie jako root)
+- hasła Wi-Fi nie są zapisywane przez aplikację ani skrypty
+
+Minimalny sudoers (plik `/etc/sudoers.d/cnc-wifi`):
+
+```bash
+andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi list
+andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi connect *
+```
+
+Skrypt pomocniczy używany przez WebUI: `tools/wifi_control.sh`.
+
+---
+
 ## ⚡ Szybki restart systemu – zasady i przyczyny opóźnień
 
 - `network-online.target` wydłuża start, gdy DHCP lub sieć nie są gotowe; w systemach CNC/embedded
@@ -209,6 +230,7 @@ cnc-control/
 | `tools/setup_webui.sh` | Konfiguracja usługi `cnc-webui.service` dla webui. |
 | `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |
 | `tools/setup_zerotier.sh` | Konfiguracja klienta ZeroTier. |
+| `tools/wifi_control.sh` | Skrypt pomocniczy do skanowania i łączenia Wi-Fi (`nmcli`). |
 | `webui/` | Prosty interfejs WWW do obsługi narzędzi. |
 | `webui/app.py` | Aplikacja webowa (serwer) dla webui. |
 

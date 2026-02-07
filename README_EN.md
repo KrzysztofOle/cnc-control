@@ -124,6 +124,27 @@ The scripts create `cnc-webui.service` and `cnc-usb.service`, enable autostart, 
 
 ---
 
+## 🌐 Wi-Fi Configuration (WebUI)
+
+The WebUI provides a simple Wi-Fi configuration based on NetworkManager (`nmcli`).
+
+Requirements:
+- NetworkManager installed and running (service `NetworkManager`)
+- sudo rules for `nmcli` (no password) for the user running WebUI
+- run WebUI as a regular user (not root)
+- Wi-Fi passwords are not stored by the app or scripts
+
+Minimal sudoers (file `/etc/sudoers.d/cnc-wifi`):
+
+```bash
+andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi list
+andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi connect *
+```
+
+Helper script used by WebUI: `tools/wifi_control.sh`.
+
+---
+
 ## ⚡ Fast reboot – rules and delay causes
 
 - `network-online.target` slows boot when DHCP or networking is not ready; in CNC/embedded systems
@@ -214,6 +235,7 @@ cnc-control/
 | `tools/setup_webui.sh` | Configures `cnc-webui.service` for webui. |
 | `tools/setup_nmtui.sh` | Installs and launches `nmtui`. |
 | `tools/setup_zerotier.sh` | Configures the ZeroTier client. |
+| `tools/wifi_control.sh` | Helper script for Wi-Fi scan/connect (`nmcli`). |
 | `webui/` | Simple web UI for tool access. |
 | `webui/app.py` | Web application (server) for webui. |
 

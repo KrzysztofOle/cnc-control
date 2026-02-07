@@ -35,6 +35,10 @@ STATUS_SCRIPT = os.environ.get(
     "CNC_STATUS_SCRIPT",
     os.path.join(REPO_ROOT, "status.sh"),
 )
+WIFI_CONTROL_SCRIPT = os.environ.get(
+    "CNC_WIFI_CONTROL_SCRIPT",
+    os.path.join(REPO_ROOT, "tools", "wifi_control.sh"),
+)
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     "/home/andrzej/cnc-control",
@@ -128,6 +132,28 @@ button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+#wifi-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 520px;
+}
+
+.wifi-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.wifi-status {
+  font-weight: 600;
+}
+
+.wifi-status-ok { color: #1b5e20; }
+.wifi-status-error { color: #b71c1c; }
+.wifi-status-muted { color: #555555; }
 
 body.ui-busy * {
   pointer-events: none;
@@ -290,6 +316,22 @@ body.ui-busy #loading-overlay * {
   <input type="hidden" name="next" value="system">
   <button type="submit">Pobierz log</button>
 </form>
+
+<hr>
+
+<h3>Wi-Fi</h3>
+<div id="wifi-panel">
+  <div class="wifi-row">
+    <button type="button" id="wifi-scan">Skanuj</button>
+    <select id="wifi-ssid" disabled></select>
+  </div>
+  <div class="wifi-row">
+    <label for="wifi-password">Hasło</label>
+    <input type="password" id="wifi-password" autocomplete="new-password">
+    <button type="button" id="wifi-connect" disabled>Połącz</button>
+  </div>
+  <div id="wifi-status" class="wifi-status wifi-status-muted">Status: bezczynny</div>
+</div>
 {% endif %}
 
 <script>
@@ -568,6 +610,171 @@ body.ui-busy #loading-overlay * {
     }
   }
 
+  function initWifiControls() {
+    const wifiScanButton = document.getElementById("wifi-scan");
+    if (!wifiScanButton) {
+      return;
+    }
+    const wifiSelect = document.getElementById("wifi-ssid");
+    const wifiPassword = document.getElementById("wifi-password");
+    const wifiConnectButton = document.getElementById("wifi-connect");
+    const wifiStatus = document.getElementById("wifi-status");
+
+    function setWifiStatus(text, level) {
+      if (!wifiStatus) {
+        return;
+      }
+      wifiStatus.textContent = text;
+      wifiStatus.classList.remove("wifi-status-ok", "wifi-status-error", "wifi-status-muted");
+      if (level === "ok") {
+        wifiStatus.classList.add("wifi-status-ok");
+      } else if (level === "error") {
+        wifiStatus.classList.add("wifi-status-error");
+      } else {
+        wifiStatus.classList.add("wifi-status-muted");
+      }
+    }
+
+    function renderWifiNetworks(networks) {
+      if (!wifiSelect || !wifiConnectButton) {
+        return;
+      }
+      const previous = wifiSelect.value;
+      wifiSelect.innerHTML = "";
+      if (!Array.isArray(networks) || networks.length === 0) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "Brak wykrytych sieci";
+        wifiSelect.appendChild(option);
+        wifiSelect.disabled = true;
+        wifiConnectButton.disabled = true;
+        return;
+      }
+
+      networks.forEach((network) => {
+        const option = document.createElement("option");
+        option.value = network.ssid || "";
+        const parts = [];
+        if (typeof network.signal === "number") {
+          parts.push(network.signal + "%");
+        }
+        parts.push(network.secure ? "zabezpieczona" : "otwarta");
+        if (network.in_use) {
+          parts.push("połączono");
+        }
+        let label = network.ssid || "Nieznana sieć";
+        if (parts.length > 0) {
+          label += " (" + parts.join(", ") + ")";
+        }
+        option.textContent = label;
+        if (network.in_use) {
+          option.selected = true;
+        }
+        wifiSelect.appendChild(option);
+      });
+
+      if (previous) {
+        const previousOption = Array.from(wifiSelect.options).find(
+          (option) => option.value === previous
+        );
+        if (previousOption) {
+          previousOption.selected = true;
+        }
+      }
+
+      wifiSelect.disabled = false;
+      wifiConnectButton.disabled = false;
+    }
+
+    async function scanWifi() {
+      if (busy) {
+        return;
+      }
+      setBusy(true, "Skanowanie Wi-Fi...");
+      setWifiStatus("Skanowanie...", "muted");
+      let payload = null;
+      let errorMessage = null;
+      try {
+        const response = await fetch("/wifi/scan", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error("Błąd skanowania Wi-Fi (HTTP " + response.status + ").");
+        }
+        payload = await response.json();
+      } catch (error) {
+        errorMessage = error.message || "Błąd skanowania Wi-Fi.";
+      }
+      setBusy(false);
+      if (errorMessage) {
+        setWifiStatus(errorMessage, "error");
+        return;
+      }
+      renderWifiNetworks(payload);
+      if (Array.isArray(payload) && payload.length > 0) {
+        setWifiStatus("Znaleziono sieci: " + payload.length + ".", "ok");
+      } else {
+        setWifiStatus("Brak dostępnych sieci.", "muted");
+      }
+    }
+
+    async function connectWifi() {
+      if (busy || !wifiSelect || !wifiPassword) {
+        return;
+      }
+      const ssid = wifiSelect.value || "";
+      const password = wifiPassword.value || "";
+      if (!ssid) {
+        setWifiStatus("Wybierz sieć Wi-Fi.", "error");
+        return;
+      }
+      if (!password) {
+        setWifiStatus("Podaj hasło Wi-Fi.", "error");
+        return;
+      }
+
+      setBusy(true, "Łączenie z Wi-Fi...");
+      setWifiStatus("Łączenie...", "muted");
+      try {
+        const response = await fetch("/wifi/connect", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ssid: ssid, password: password }),
+        });
+        if (!response.ok) {
+          let message = "Nie udało się połączyć z siecią.";
+          try {
+            const payload = await response.json();
+            if (payload && payload.error) {
+              message = payload.error;
+            }
+          } catch (payloadError) {
+            message = message + " (HTTP " + response.status + ").";
+          }
+          throw new Error(message);
+        }
+        const payload = await response.json();
+        const message = (payload && payload.message) || "Połączono z siecią Wi-Fi.";
+        setWifiStatus(message, "ok");
+        wifiPassword.value = "";
+      } catch (error) {
+        setWifiStatus(error.message || "Błąd połączenia Wi-Fi.", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    wifiScanButton.addEventListener("click", scanWifi);
+    if (wifiConnectButton) {
+      wifiConnectButton.addEventListener("click", connectWifi);
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     const forms = document.querySelectorAll("form");
     forms.forEach((form) => {
@@ -592,6 +799,8 @@ body.ui-busy #loading-overlay * {
       pollStatus();
       setInterval(pollStatus, 2000);
     }
+
+    initWifiControls();
   });
 </script>
 
@@ -640,6 +849,74 @@ def parse_status_mount_point(output):
         value = line.split("Punkt montowania:", 1)[1].strip()
         return value or None
     return None
+
+
+def split_nmcli_fields(line):
+    fields = []
+    buffer = []
+    escaped = False
+    for char in line:
+        if escaped:
+            buffer.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == ":":
+            fields.append("".join(buffer))
+            buffer = []
+            continue
+        buffer.append(char)
+    fields.append("".join(buffer))
+    return fields
+
+
+def parse_wifi_scan_output(output):
+    networks = {}
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        fields = split_nmcli_fields(line)
+        if len(fields) < 4:
+            continue
+        in_use_raw, ssid, security, signal_raw = fields[:4]
+        if not ssid:
+            continue
+        in_use = in_use_raw.strip() == "*"
+        security = security.strip()
+        secure = bool(security) and security != "--"
+        try:
+            signal = int(signal_raw)
+        except ValueError:
+            signal = 0
+        entry = networks.get(ssid)
+        if not entry:
+            networks[ssid] = {
+                "ssid": ssid,
+                "secure": secure,
+                "signal": signal,
+                "in_use": in_use,
+            }
+            continue
+        if signal > entry["signal"]:
+            entry["signal"] = signal
+        entry["secure"] = entry["secure"] or secure
+        entry["in_use"] = entry["in_use"] or in_use
+
+    result = list(networks.values())
+    result.sort(key=lambda item: (not item["in_use"], -item["signal"], item["ssid"].casefold()))
+    return result
+
+
+def run_wifi_control(args, timeout=20):
+    return subprocess.run(
+        [WIFI_CONTROL_SCRIPT] + args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
 
 
 def is_mount_active(mount_point):
@@ -1014,6 +1291,53 @@ def api_restart_gui():
         return jsonify({"error": message}), 500
 
     return jsonify({"ok": True})
+
+@app.route("/wifi/scan", methods=["GET"])
+def wifi_scan():
+    if not os.path.isfile(WIFI_CONTROL_SCRIPT):
+        return jsonify({"error": "Brak skryptu wifi_control.sh"}), 500
+    try:
+        result = run_wifi_control(["scan"], timeout=20)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout skanowania Wi-Fi"}), 500
+    except OSError:
+        return jsonify({"error": "Nie można uruchomić wifi_control.sh"}), 500
+
+    if result.returncode != 0:
+        app.logger.warning("Skanowanie Wi-Fi nieudane (rc=%s).", result.returncode)
+        return jsonify({"error": "Błąd skanowania Wi-Fi"}), 500
+
+    networks = parse_wifi_scan_output(result.stdout or "")
+    return jsonify(networks)
+
+@app.route("/wifi/connect", methods=["POST"])
+def wifi_connect():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+
+    ssid = payload.get("ssid")
+    password = payload.get("password")
+    if not isinstance(ssid, str) or not ssid.strip():
+        return jsonify({"error": "Brak SSID"}), 400
+    if not isinstance(password, str) or not password:
+        return jsonify({"error": "Brak hasła"}), 400
+
+    if not os.path.isfile(WIFI_CONTROL_SCRIPT):
+        return jsonify({"error": "Brak skryptu wifi_control.sh"}), 500
+
+    try:
+        result = run_wifi_control(["connect", ssid, password], timeout=30)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout łączenia Wi-Fi"}), 500
+    except OSError:
+        return jsonify({"error": "Nie można uruchomić wifi_control.sh"}), 500
+
+    if result.returncode != 0:
+        app.logger.warning("Połączenie Wi-Fi nieudane (rc=%s).", result.returncode)
+        return jsonify({"error": "Nie udało się połączyć z siecią Wi-Fi"}), 500
+
+    return jsonify({"ok": True, "message": f"Połączono z siecią: {ssid}."})
 
 @app.route("/upload", methods=["POST"])
 def upload():
