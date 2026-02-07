@@ -777,7 +777,21 @@ def is_repo_dirty():
     )
     if result.returncode != 0:
         return None, f"Blad git status: {stderr or stdout}"
-    return bool(stdout.strip()), None
+    ignored_paths = {".app_version"}
+    dirty_entries = []
+    for line in stdout.splitlines():
+        entry = line.strip()
+        if not entry:
+            continue
+        path = entry[3:] if len(entry) > 3 else ""
+        if path.startswith('"') and path.endswith('"') and len(path) >= 2:
+            path = path[1:-1]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path in ignored_paths:
+            continue
+        dirty_entries.append(entry)
+    return bool(dirty_entries), None
 
 
 def redirect_to_next(message=None):
