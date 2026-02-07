@@ -769,6 +769,34 @@ def get_tag_description(tag):
     return "", None
 
 
+def get_current_branch():
+    result, stdout, stderr = run_git_command(
+        ["git", "symbolic-ref", "--short", "-q", "HEAD"],
+        CONTROL_REPO_DIR,
+        "git symbolic-ref --short -q HEAD",
+    )
+    if result.returncode != 0:
+        return None, f"Blad git symbolic-ref: {stderr or stdout}"
+    branch = stdout.strip()
+    if not branch:
+        return "", None
+    return branch, None
+
+
+def get_default_remote_branch():
+    result, stdout, stderr = run_git_command(
+        ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+        CONTROL_REPO_DIR,
+        "git symbolic-ref --quiet refs/remotes/origin/HEAD",
+    )
+    if result.returncode != 0:
+        return "main", None
+    ref = stdout.strip()
+    if not ref:
+        return "main", None
+    return ref.rsplit("/", 1)[-1], None
+
+
 def is_repo_dirty():
     result, stdout, stderr = run_git_command(
         ["git", "status", "--porcelain"],
@@ -1034,6 +1062,31 @@ def git_pull():
 
 @app.route("/git-pull-plain", methods=["POST"])
 def git_pull_plain():
+    branch, branch_error = get_current_branch()
+    if branch_error:
+        return redirect_to_next(branch_error)
+    if branch == "":
+        default_branch, default_error = get_default_remote_branch()
+        if default_error:
+            return redirect_to_next(default_error)
+        # PL: Repo jest w trybie detached HEAD (np. po checkout taga).
+        # EN: Repo is in detached HEAD (e.g. after tag checkout).
+        checkout_result, _, checkout_err = run_git_command(
+            ["git", "checkout", default_branch],
+            CONTROL_REPO_DIR,
+            f"git checkout {default_branch}",
+        )
+        if checkout_result.returncode != 0:
+            # PL: Tworzymy lub nadpisujemy lokalna galez z origin/<branch>.
+            # EN: Create or reset local branch from origin/<branch>.
+            checkout_result, _, checkout_err = run_git_command(
+                ["git", "checkout", "-B", default_branch, f"origin/{default_branch}"],
+                CONTROL_REPO_DIR,
+                f"git checkout -B {default_branch} origin/{default_branch}",
+            )
+            if checkout_result.returncode != 0:
+                return redirect_to_next(f"Blad git checkout: {checkout_err}")
+
     result, stdout, stderr = run_git_command(
         ["git", "pull"],
         CONTROL_REPO_DIR,
