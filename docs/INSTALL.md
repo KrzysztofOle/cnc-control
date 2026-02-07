@@ -32,6 +32,13 @@ Skrypt `tools/setup_system.sh` kopiuje tam domyślny plik `config/cnc-control.en
 - `CNC_MOUNT_POINT` – punkt montowania obrazu (upload G-code).
 - `CNC_UPLOAD_DIR` – katalog, do którego WebUI zapisuje pliki.
 
+## PolicyKit (restart GUI)
+
+Skrypt `tools/setup_system.sh` instaluje regułę PolicyKit, która pozwala
+użytkownikowi WebUI (`andrzej`) wykonać `systemctl restart cnc-webui.service`
+bez podawania hasła. Przy instalacji ręcznej skopiuj plik
+`systemd/polkit/50-cnc-webui-restart.rules` do `/etc/polkit-1/rules.d/`.
+
 ## Samba (tylko smbd, port 445)
 
 Konfiguracja Samby w tym projekcie jest celowo uproszczona:

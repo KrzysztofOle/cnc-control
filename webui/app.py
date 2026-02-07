@@ -6,12 +6,14 @@ from flask import (
     render_template_string,
     send_file,
     after_this_request,
+    jsonify,
 )
 import subprocess
 import os
 import tempfile
 import json
 import re
+import shutil
 from datetime import datetime
 from werkzeug.utils import secure_filename
 
@@ -28,6 +30,10 @@ NET_MODE_SCRIPT = os.environ.get(
 USB_MODE_SCRIPT = os.environ.get(
     "CNC_USB_MODE_SCRIPT",
     os.path.join(REPO_ROOT, "usb_mode.sh"),
+)
+STATUS_SCRIPT = os.environ.get(
+    "CNC_STATUS_SCRIPT",
+    os.path.join(REPO_ROOT, "status.sh"),
 )
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
@@ -65,12 +71,62 @@ HTML = """
   border-radius: 50%;
   margin-right: 6px;
 }
-.green { background-color: #2ecc71; }
-.gray  { background-color: #bdc3c7; }
+.indicator--net { background-color: #3498db; }
+.indicator--usb { background-color: #e67e22; }
+.indicator--inactive { background-color: #bdc3c7; }
+
+.mode-label {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.mode-net {
+  color: #1f4f7a;
+  background: #e3f2fd;
+  border: 1px solid #90caf9;
+}
+
+.mode-usb {
+  color: #8a4f0a;
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+}
+
+.mode-unknown {
+  color: #555555;
+  background: #f2f2f2;
+  border: 1px solid #d6d6d6;
+}
+
+.mode-status {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mode-status-hidden {
+  display: none;
+}
+
+.mode-status-switching {
+  color: #8a6d1d;
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+}
 
 button {
   padding: 6px 12px;
   margin: 4px 0;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 body.ui-busy * {
@@ -156,16 +212,25 @@ body.ui-busy #loading-overlay * {
 
 {% if page != 'system' %}
 <h3>Operacje CNC</h3>
-<p><b>Tryb:</b> {{ mode }}</p>
+<p><b>Tryb:</b>
+  {% if mode == 'SIEĆ (UPLOAD)' %}
+    <span id="mode-label" class="mode-label mode-net">{{ mode }}</span>
+  {% elif mode == 'USB (CNC)' %}
+    <span id="mode-label" class="mode-label mode-usb">{{ mode }}</span>
+  {% else %}
+    <span id="mode-label" class="mode-label mode-unknown">{{ mode }}</span>
+  {% endif %}
+  <span id="mode-switching" class="mode-status mode-status-hidden" aria-live="polite">PRZEŁĄCZANIE...</span>
+</p>
 
 <form action="/net" method="post">
-  <span class="indicator {{ 'green' if mode == 'SIEĆ (UPLOAD)' else 'gray' }}"></span>
-  <button type="submit">Tryb sieć (upload)</button>
+  <span class="indicator {{ 'indicator--net' if mode == 'SIEĆ (UPLOAD)' else 'indicator--inactive' }}" data-mode-indicator="NET"></span>
+  <button type="submit" data-mode-switch="NET">Tryb sieć (upload)</button>
 </form>
 
 <form action="/usb" method="post">
-  <span class="indicator {{ 'green' if mode == 'USB (CNC)' else 'gray' }}"></span>
-  <button type="submit">Tryb USB (CNC)</button>
+  <span class="indicator {{ 'indicator--usb' if mode == 'USB (CNC)' else 'indicator--inactive' }}" data-mode-indicator="USB"></span>
+  <button type="submit" data-mode-switch="USB">Tryb USB (CNC)</button>
 </form>
 
 <hr>
@@ -194,6 +259,17 @@ body.ui-busy #loading-overlay * {
   <input type="hidden" name="next" value="system">
   <button type="submit">Restart</button>
 </form>
+
+<div>
+  <button
+    type="button"
+    id="restart-gui-button"
+    title="Niedostępne w trybie USB"
+    disabled
+  >
+    🔄 Restart GUI
+  </button>
+</div>
 
 <form action="/poweroff" method="post">
   <input type="hidden" name="next" value="system">
@@ -300,6 +376,54 @@ body.ui-busy #loading-overlay * {
     return "cnc-log.log";
   }
 
+  function updateRestartGuiButton(mode) {
+    const button = document.getElementById("restart-gui-button");
+    if (!button) {
+      return;
+    }
+    const isUsb = mode === "USB";
+    button.disabled = isUsb;
+    if (isUsb) {
+      button.title = "Niedostępne w trybie USB";
+    } else {
+      button.removeAttribute("title");
+    }
+  }
+
+  async function restartGui() {
+    const button = document.getElementById("restart-gui-button");
+    if (!button || button.disabled || busy) {
+      return;
+    }
+    setBusy(true, "Restarting GUI…");
+    try {
+      const response = await fetch("/api/restart-gui", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        let message = "Nie udało się zrestartować GUI.";
+        try {
+          const payload = await response.json();
+          if (payload && payload.error) {
+            message = payload.error;
+          } else {
+            message = "Błąd HTTP: " + response.status;
+          }
+        } catch (error) {
+          message = "Błąd HTTP: " + response.status;
+        }
+        throw new Error(message);
+      }
+      setTimeout(() => {
+        window.location.reload();
+      }, 5000);
+    } catch (error) {
+      setBusy(false);
+      alert(error.message || "Nie udało się zrestartować GUI.");
+    }
+  }
+
   async function runAction(request) {
     if (busy) {
       return;
@@ -363,6 +487,87 @@ body.ui-busy #loading-overlay * {
     });
   }
 
+  const MODE_LABELS = {
+    NET: "SIEĆ (UPLOAD)",
+    USB: "USB (CNC)",
+  };
+  const MODE_CLASS = {
+    NET: "mode-net",
+    USB: "mode-usb",
+  };
+  const INDICATOR_CLASS = {
+    NET: "indicator--net",
+    USB: "indicator--usb",
+  };
+
+  function applyMode(mode) {
+    const label = MODE_LABELS[mode];
+    if (!label) {
+      return;
+    }
+    const modeLabel = document.getElementById("mode-label");
+    if (modeLabel) {
+      modeLabel.textContent = label;
+      modeLabel.classList.remove("mode-net", "mode-usb", "mode-unknown");
+      modeLabel.classList.add(MODE_CLASS[mode] || "mode-unknown");
+    }
+    updateRestartGuiButton(mode);
+    const indicators = document.querySelectorAll("[data-mode-indicator]");
+    indicators.forEach((indicator) => {
+      const indicatorMode = indicator.getAttribute("data-mode-indicator");
+      const isActive = indicatorMode === mode;
+      indicator.classList.remove("indicator--net", "indicator--usb", "indicator--inactive");
+      if (isActive) {
+        indicator.classList.add(INDICATOR_CLASS[mode] || "indicator--inactive");
+      } else {
+        indicator.classList.add("indicator--inactive");
+      }
+    });
+  }
+
+  function applySwitching(switching) {
+    if (switching !== true && switching !== false) {
+      return;
+    }
+    const statusLabel = document.getElementById("mode-switching");
+    if (statusLabel) {
+      if (switching) {
+        statusLabel.classList.remove("mode-status-hidden");
+        statusLabel.classList.add("mode-status-switching");
+      } else {
+        statusLabel.classList.add("mode-status-hidden");
+        statusLabel.classList.remove("mode-status-switching");
+      }
+    }
+    const buttons = document.querySelectorAll("[data-mode-switch]");
+    buttons.forEach((button) => {
+      button.disabled = switching;
+    });
+  }
+
+  async function pollStatus() {
+    try {
+      const response = await fetch("/api/status", {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        return;
+      }
+      const payload = await response.json();
+      if (payload && payload.mode) {
+        applyMode(payload.mode);
+      }
+      if (payload && "switching" in payload) {
+        applySwitching(payload.switching);
+      }
+    } catch (error) {
+      // PL: Ignorujemy błędy odpytywania statusu, aby nie zakłócać UI.
+      // EN: Ignore polling errors to avoid disrupting the UI.
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     const forms = document.querySelectorAll("form");
     forms.forEach((form) => {
@@ -375,6 +580,18 @@ body.ui-busy #loading-overlay * {
         runAction(request);
       });
     });
+
+    const restartGuiButton = document.getElementById("restart-gui-button");
+    if (restartGuiButton) {
+      restartGuiButton.addEventListener("click", () => {
+        restartGui();
+      });
+    }
+
+    if (document.getElementById("mode-label") || restartGuiButton) {
+      pollStatus();
+      setInterval(pollStatus, 2000);
+    }
   });
 </script>
 
@@ -401,6 +618,64 @@ def log_webui_event(message):
             log_file.write(log_line)
     except OSError:
         app.logger.warning("Nie mozna zapisac do CNC_WEBUI_LOG: %s", WEBUI_LOG_PATH)
+
+
+def parse_status_mode(output):
+    for line in output.splitlines():
+        if "Tryb pracy:" not in line:
+            continue
+        value = line.split("Tryb pracy:", 1)[1].strip()
+        value_norm = value.casefold()
+        if value_norm.startswith("usb"):
+            return "USB"
+        if value_norm.startswith("sieć") or value_norm.startswith("siec"):
+            return "NET"
+    return None
+
+
+def parse_status_mount_point(output):
+    for line in output.splitlines():
+        if not line.startswith("Punkt montowania:"):
+            continue
+        value = line.split("Punkt montowania:", 1)[1].strip()
+        return value or None
+    return None
+
+
+def is_mount_active(mount_point):
+    if not mount_point:
+        return None
+    result = subprocess.run(
+        ["mount"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        app.logger.warning("Nie mozna odczytac listy montowan (rc=%s).", result.returncode)
+        return None
+    needle = f" on {mount_point} "
+    for line in (result.stdout or "").splitlines():
+        if needle in line:
+            return True
+    return False
+
+
+def is_samba_active():
+    if not shutil.which("systemctl"):
+        app.logger.warning("Brak systemctl - nie mozna sprawdzic smbd.")
+        return None
+    result = subprocess.run(
+        ["systemctl", "is-active", "smbd.service"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and (result.stdout or "").strip() == "active":
+        return True
+    if result.returncode != 0 and (result.stdout or "").strip() == "unknown":
+        app.logger.warning("smbd.service nie istnieje w systemd.")
+    return False
 
 
 def run_git_command(args, cwd, label):
@@ -560,6 +835,109 @@ def net():
 def usb():
     subprocess.call([USB_MODE_SCRIPT])
     return redirect(url_for("index"))
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    result = subprocess.run(
+        [STATUS_SCRIPT],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    mode = parse_status_mode(stdout)
+    mount_point = parse_status_mount_point(stdout)
+    if not mode:
+        app.logger.warning(
+            "Nie rozpoznano trybu z status.sh (rc=%s). stdout='%s' stderr='%s'",
+            result.returncode,
+            stdout.strip(),
+            stderr.strip(),
+        )
+        return jsonify({"mode": None, "error": "Brak trybu w status.sh"}), 500
+    usb_gadget = mode == "USB"
+    img_mounted = is_mount_active(mount_point)
+    samba_active = is_samba_active()
+    switching = None
+    if img_mounted is not None:
+        switching = usb_gadget and img_mounted
+    return jsonify(
+        {
+            "mode": mode,
+            "usb_gadget": usb_gadget,
+            "samba": samba_active,
+            "mount_point": mount_point,
+            "img_mounted": img_mounted,
+            "switching": switching,
+        }
+    )
+
+@app.route("/api/restart-gui", methods=["POST"])
+def api_restart_gui():
+    try:
+        status_result = subprocess.run(
+            [STATUS_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout status.sh"}), 500
+    except OSError:
+        return jsonify({"error": "Nie można uruchomić status.sh"}), 500
+
+    stdout = status_result.stdout or ""
+    stderr = status_result.stderr or ""
+    if status_result.returncode != 0:
+        app.logger.warning(
+            "status.sh zakonczony bledem (rc=%s). stdout='%s' stderr='%s'",
+            status_result.returncode,
+            stdout.strip(),
+            stderr.strip(),
+        )
+        return jsonify({"error": "Błąd status.sh"}), 500
+
+    mode = parse_status_mode(stdout)
+    if not mode:
+        app.logger.warning(
+            "Nie rozpoznano trybu z status.sh. stdout='%s' stderr='%s'",
+            stdout.strip(),
+            stderr.strip(),
+        )
+        return jsonify({"error": "Brak trybu w status.sh"}), 500
+
+    if mode == "USB":
+        return jsonify({"error": "GUI restart disabled in USB mode"}), 409
+
+    if mode != "NET":
+        return jsonify({"error": "Nieznany tryb pracy"}), 500
+
+    if not shutil.which("systemctl"):
+        return jsonify({"error": "Brak systemctl"}), 500
+
+    try:
+        restart_result = subprocess.run(
+            ["systemctl", "restart", "cnc-webui.service"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout restartu GUI"}), 500
+    except OSError:
+        return jsonify({"error": "Nie można uruchomić systemctl"}), 500
+
+    if restart_result.returncode != 0:
+        detail = (restart_result.stderr or restart_result.stdout or "").strip()
+        message = "Błąd restartu GUI"
+        if detail:
+            message = f"{message}: {detail}"
+        return jsonify({"error": message}), 500
+
+    return jsonify({"ok": True})
 
 @app.route("/upload", methods=["POST"])
 def upload():

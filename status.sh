@@ -44,6 +44,7 @@ else
 fi
 
 echo "Tryb pracy: $MODE"
+echo "Punkt montowania: $MOUNT"
 
 # Sprawdzenie montowania
 if mount | grep -q "$IMG"; then

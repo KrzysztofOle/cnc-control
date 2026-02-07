@@ -11,6 +11,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 SYSTEMD_SERVICE_SRC="${REPO_ROOT}/systemd/cnc-webui.service"
 SYSTEMD_SERVICE_DEST="/etc/systemd/system/cnc-webui.service"
+POLKIT_RULE_SRC="${REPO_ROOT}/systemd/polkit/50-cnc-webui-restart.rules"
+POLKIT_RULE_DEST="/etc/polkit-1/rules.d/50-cnc-webui-restart.rules"
 ENV_SRC="${REPO_ROOT}/config/cnc-control.env.example"
 ENV_DEST="/etc/cnc-control/cnc-control.env"
 OVERRIDE_DIR="/etc/systemd/system/cnc-webui.service.d"
@@ -53,6 +55,13 @@ chown root:root /var/lib/cnc-control "${SAMBA_SHARE_PATH}"
 chmod 755 "${SAMBA_SHARE_PATH}"
 
 install -o root -g root -m 644 "${SYSTEMD_SERVICE_SRC}" "${SYSTEMD_SERVICE_DEST}"
+
+if [ -f "${POLKIT_RULE_SRC}" ]; then
+    mkdir -p "$(dirname "${POLKIT_RULE_DEST}")"
+    install -o root -g root -m 644 "${POLKIT_RULE_SRC}" "${POLKIT_RULE_DEST}"
+else
+    echo "Brak pliku PolicyKit: ${POLKIT_RULE_SRC}"
+fi
 
 mkdir -p "${OVERRIDE_DIR}"
 cat <<'OVERRIDE' > "${OVERRIDE_FILE}"

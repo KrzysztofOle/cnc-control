@@ -32,6 +32,13 @@ The `tools/setup_system.sh` script copies the default `config/cnc-control.env.ex
 - `CNC_MOUNT_POINT` – image mount point (G-code upload).
 - `CNC_UPLOAD_DIR` – directory where WebUI writes uploaded files.
 
+## PolicyKit (GUI restart)
+
+The `tools/setup_system.sh` script installs a PolicyKit rule that allows the
+WebUI user (`andrzej`) to run `systemctl restart cnc-webui.service` without a
+password. For manual setup, copy
+`systemd/polkit/50-cnc-webui-restart.rules` to `/etc/polkit-1/rules.d/`.
+
 ## Samba (smbd only, port 445)
 
 Samba is intentionally configured in a minimal mode:
