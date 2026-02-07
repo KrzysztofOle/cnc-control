@@ -797,6 +797,36 @@ def get_default_remote_branch():
     return ref.rsplit("/", 1)[-1], None
 
 
+def get_ignored_repo_dirs():
+    ignored_dirs = []
+    if not UPLOAD_DIR:
+        return ignored_dirs
+    upload_abs = os.path.abspath(UPLOAD_DIR)
+    repo_abs = os.path.abspath(CONTROL_REPO_DIR)
+    if upload_abs == repo_abs:
+        return ignored_dirs
+    try:
+        common = os.path.commonpath([upload_abs, repo_abs])
+    except ValueError:
+        return ignored_dirs
+    if common != repo_abs:
+        return ignored_dirs
+    rel_path = os.path.relpath(upload_abs, repo_abs)
+    if rel_path in (".", ""):
+        return ignored_dirs
+    ignored_dirs.append(rel_path.replace("\\", "/"))
+    return ignored_dirs
+
+
+def is_path_ignored(path, ignored_paths, ignored_dirs):
+    if path in ignored_paths:
+        return True
+    for ignored_dir in ignored_dirs:
+        if path == ignored_dir or path.startswith(f"{ignored_dir}/"):
+            return True
+    return False
+
+
 def is_repo_dirty():
     result, stdout, stderr = run_git_command(
         ["git", "status", "--porcelain"],
@@ -804,9 +834,11 @@ def is_repo_dirty():
         "git status --porcelain",
     )
     if result.returncode != 0:
-        return None, f"Blad git status: {stderr or stdout}"
+        return None, f"Blad git status: {stderr or stdout}", []
     ignored_paths = {".app_version"}
+    ignored_dirs = get_ignored_repo_dirs()
     dirty_entries = []
+    dirty_paths = []
     for line in stdout.splitlines():
         entry = line.strip()
         if not entry:
@@ -816,10 +848,12 @@ def is_repo_dirty():
             path = path[1:-1]
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
-        if path in ignored_paths:
+        path = path.replace("\\", "/")
+        if is_path_ignored(path, ignored_paths, ignored_dirs):
             continue
         dirty_entries.append(entry)
-    return bool(dirty_entries), None
+        dirty_paths.append(path)
+    return bool(dirty_entries), None, dirty_paths
 
 
 def redirect_to_next(message=None):
@@ -1021,10 +1055,16 @@ def poweroff():
 
 @app.route("/git-pull", methods=["POST"])
 def git_pull():
-    dirty, error = is_repo_dirty()
+    dirty, error, dirty_paths = is_repo_dirty()
     if error:
         return redirect_to_next(error)
     if dirty:
+        if dirty_paths:
+            preview = ", ".join(dirty_paths[:5])
+            suffix = "..." if len(dirty_paths) > 5 else ""
+            return redirect_to_next(
+                f"Repozytorium ma niezacommitowane zmiany: {preview}{suffix}"
+            )
         return redirect_to_next("Repozytorium ma niezacommitowane zmiany")
 
     fetch_result, _, fetch_err = run_git_command(
