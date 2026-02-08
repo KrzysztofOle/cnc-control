@@ -83,7 +83,7 @@ Zasada: **tag Git = wersja aplikacji**. Używaj **annotated tags**.
 Przykład:
 
 ```bash
-git tag -a v0.1.10 -m "fast-robot"
+git tag -a v0.1.14 -m "zerotier"
 git push origin v0.1.10
 ```
 
