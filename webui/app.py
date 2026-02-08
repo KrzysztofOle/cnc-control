@@ -59,6 +59,10 @@ WEBUI_LOG_SINCE = os.environ.get(
     "CNC_WEBUI_LOG_SINCE",
     "24 hours ago",
 )
+ZEROTIER_SERVICE = os.environ.get(
+    "CNC_ZEROTIER_SERVICE",
+    "zerotier-one",
+)
 APP_VERSION_FILE = os.path.join(CONTROL_REPO_DIR, ".app_version")
 SEMVER_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+].*)?$")
 HIDDEN_NAMES = {
@@ -135,6 +139,84 @@ button {
 button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+#zerotier-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 520px;
+}
+
+.zerotier-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.zerotier-description {
+  font-size: 13px;
+  color: #555555;
+}
+
+.zerotier-status {
+  font-weight: 600;
+}
+
+.zerotier-status-ok { color: #1b5e20; }
+.zerotier-status-off { color: #6b4f0a; }
+.zerotier-status-error { color: #b71c1c; }
+.zerotier-status-muted { color: #555555; }
+
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: #c7c7c7;
+  transition: 0.2s;
+  border-radius: 14px;
+  border: 1px solid #b0b0b0;
+}
+
+.toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 2px;
+  background-color: #ffffff;
+  transition: 0.2s;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.toggle input:checked + .toggle-slider {
+  background-color: #2ecc71;
+  border-color: #27ae60;
+}
+
+.toggle input:checked + .toggle-slider::before {
+  transform: translateX(19px);
+}
+
+.toggle input:disabled + .toggle-slider {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 #wifi-panel {
@@ -320,6 +402,22 @@ body.ui-busy #loading-overlay * {
   <input type="hidden" name="next" value="system">
   <button type="submit">Pobierz log</button>
 </form>
+
+<hr>
+
+<h3>ZeroTier</h3>
+<div id="zerotier-panel">
+  <div class="zerotier-row">
+    <label class="toggle" aria-label="ZeroTier">
+      <input type="checkbox" id="zerotier-toggle">
+      <span class="toggle-slider"></span>
+    </label>
+    <div id="zerotier-state" class="zerotier-status zerotier-status-muted">Status: nieznany</div>
+  </div>
+  <div class="zerotier-description">ON – zdalny dostęp aktywny</div>
+  <div class="zerotier-description">OFF – zdalny dostęp wyłączony</div>
+  <div id="zerotier-result" class="zerotier-status zerotier-status-muted"></div>
+</div>
 
 <hr>
 
@@ -871,6 +969,139 @@ body.ui-busy #loading-overlay * {
     })();
   }
 
+  function initZeroTierControls() {
+    const toggle = document.getElementById("zerotier-toggle");
+    if (!toggle) {
+      return;
+    }
+    const stateLabel = document.getElementById("zerotier-state");
+    const resultLabel = document.getElementById("zerotier-result");
+
+    function setResult(text, level) {
+      if (!resultLabel) {
+        return;
+      }
+      resultLabel.textContent = text || "";
+      resultLabel.classList.remove(
+        "zerotier-status-ok",
+        "zerotier-status-off",
+        "zerotier-status-error",
+        "zerotier-status-muted",
+      );
+      if (level === "ok") {
+        resultLabel.classList.add("zerotier-status-ok");
+      } else if (level === "off") {
+        resultLabel.classList.add("zerotier-status-off");
+      } else if (level === "error") {
+        resultLabel.classList.add("zerotier-status-error");
+      } else {
+        resultLabel.classList.add("zerotier-status-muted");
+      }
+    }
+
+    function setState(text, level) {
+      if (!stateLabel) {
+        return;
+      }
+      stateLabel.textContent = text;
+      stateLabel.classList.remove(
+        "zerotier-status-ok",
+        "zerotier-status-off",
+        "zerotier-status-error",
+        "zerotier-status-muted",
+      );
+      if (level === "ok") {
+        stateLabel.classList.add("zerotier-status-ok");
+      } else if (level === "off") {
+        stateLabel.classList.add("zerotier-status-off");
+      } else if (level === "error") {
+        stateLabel.classList.add("zerotier-status-error");
+      } else {
+        stateLabel.classList.add("zerotier-status-muted");
+      }
+    }
+
+    function setToggleBusy(isBusy) {
+      toggle.disabled = isBusy;
+    }
+
+    async function refreshZeroTier() {
+      try {
+        const response = await fetch("/api/zerotier", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error("Błąd odczytu stanu (HTTP " + response.status + ").");
+        }
+        const payload = await response.json();
+        if (!payload || typeof payload.active !== "boolean") {
+          throw new Error("Nieprawidłowa odpowiedź z API.");
+        }
+        toggle.checked = Boolean(payload.active);
+        setState(
+          payload.active ? "Status: aktywny" : "Status: wyłączony",
+          payload.active ? "ok" : "off",
+        );
+        setResult("", "muted");
+      } catch (error) {
+        setState("Status: błąd", "error");
+        setResult(error.message || "Błąd pobierania stanu.", "error");
+      }
+    }
+
+    async function applyZeroTier(enabled) {
+      if (busy) {
+        return;
+      }
+      setToggleBusy(true);
+      setResult("Aktualizacja...", "muted");
+      try {
+        const response = await fetch("/api/zerotier", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ enabled: enabled }),
+        });
+        if (!response.ok) {
+          let message = "Nie udało się zmienić stanu ZeroTier.";
+          try {
+            const payload = await response.json();
+            if (payload && payload.error) {
+              message = payload.error;
+            }
+          } catch (payloadError) {
+            message = message + " (HTTP " + response.status + ").";
+          }
+          throw new Error(message);
+        }
+        const payload = await response.json();
+        const isOn = payload && payload.status === "on";
+        toggle.checked = isOn;
+        setState(
+          isOn ? "Status: aktywny" : "Status: wyłączony",
+          isOn ? "ok" : "off",
+        );
+        setResult(isOn ? "✅ ZeroTier włączony" : "⛔ ZeroTier wyłączony", isOn ? "ok" : "off");
+      } catch (error) {
+        toggle.checked = !enabled;
+        setResult(error.message || "Błąd zmiany stanu ZeroTier.", "error");
+        setState("Status: błąd", "error");
+      } finally {
+        setToggleBusy(false);
+      }
+    }
+
+    toggle.addEventListener("change", () => {
+      applyZeroTier(toggle.checked);
+    });
+
+    refreshZeroTier();
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     const forms = document.querySelectorAll("form");
     forms.forEach((form) => {
@@ -897,6 +1128,7 @@ body.ui-busy #loading-overlay * {
     }
 
     initWifiControls();
+    initZeroTierControls();
   });
 </script>
 
@@ -1070,6 +1302,61 @@ def is_samba_active():
     if result.returncode != 0 and (result.stdout or "").strip() == "unknown":
         app.logger.warning("smbd.service nie istnieje w systemd.")
     return False
+
+
+def run_systemctl_command(args, timeout=10):
+    if not shutil.which("systemctl"):
+        return None, "Brak systemctl"
+    try:
+        result = subprocess.run(
+            ["systemctl"] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "Timeout systemctl"
+    except OSError:
+        return None, "Nie można uruchomić systemctl"
+    return result, None
+
+
+def parse_systemctl_state(value, true_value, false_values):
+    if value == true_value:
+        return True, None
+    if value in false_values:
+        return False, None
+    if value in ("unknown", "not-found"):
+        return None, "Brak usługi ZeroTier"
+    return None, f"Nieznany stan systemctl: {value}"
+
+
+def read_zerotier_state():
+    result, error = run_systemctl_command(["is-active", ZEROTIER_SERVICE], timeout=6)
+    if error:
+        return None, None, error
+    active_value = (result.stdout or "").strip()
+    active, active_error = parse_systemctl_state(
+        active_value,
+        "active",
+        {"inactive", "failed", "deactivating", "activating"},
+    )
+    if active_error:
+        return None, None, active_error
+
+    result, error = run_systemctl_command(["is-enabled", ZEROTIER_SERVICE], timeout=6)
+    if error:
+        return None, None, error
+    enabled_value = (result.stdout or "").strip()
+    enabled, enabled_error = parse_systemctl_state(
+        enabled_value,
+        "enabled",
+        {"disabled", "static", "indirect", "masked"},
+    )
+    if enabled_error:
+        return None, None, enabled_error
+    return active, enabled, None
 
 
 def run_git_command(args, cwd, label):
@@ -1408,6 +1695,65 @@ def api_restart_gui():
         return jsonify({"error": message}), 500
 
     return jsonify({"ok": True})
+
+@app.route("/api/zerotier", methods=["GET"])
+def api_zerotier_status():
+    active, enabled, error = read_zerotier_state()
+    if error:
+        return jsonify({"error": error}), 500
+    return jsonify({"active": bool(active), "enabled": bool(enabled)})
+
+@app.route("/api/zerotier", methods=["POST"])
+def api_zerotier_toggle():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "Pole enabled musi być typu boolean"}), 400
+
+    if enabled:
+        result, error = run_systemctl_command(["enable", ZEROTIER_SERVICE], timeout=10)
+        if error:
+            return jsonify({"error": error}), 500
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            message = "Błąd systemctl enable"
+            if detail:
+                message = f"{message}: {detail}"
+            return jsonify({"error": message}), 500
+
+        result, error = run_systemctl_command(["start", ZEROTIER_SERVICE], timeout=10)
+        if error:
+            return jsonify({"error": error}), 500
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            message = "Błąd systemctl start"
+            if detail:
+                message = f"{message}: {detail}"
+            return jsonify({"error": message}), 500
+        return jsonify({"status": "on"})
+
+    result, error = run_systemctl_command(["stop", ZEROTIER_SERVICE], timeout=10)
+    if error:
+        return jsonify({"error": error}), 500
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        message = "Błąd systemctl stop"
+        if detail:
+            message = f"{message}: {detail}"
+        return jsonify({"error": message}), 500
+
+    result, error = run_systemctl_command(["disable", ZEROTIER_SERVICE], timeout=10)
+    if error:
+        return jsonify({"error": error}), 500
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        message = "Błąd systemctl disable"
+        if detail:
+            message = f"{message}: {detail}"
+        return jsonify({"error": message}), 500
+    return jsonify({"status": "off"})
 
 @app.route("/wifi/scan", methods=["GET"])
 def wifi_scan():
