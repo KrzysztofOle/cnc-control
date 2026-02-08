@@ -54,6 +54,13 @@ W trybie AP WebUI pokazuje listę sieci zapamiętaną tuż przed przełączeniem
 oraz umożliwia ręczne wpisanie SSID i hasła. Po zatwierdzeniu połączenia AP jest
 automatycznie wyłączany, a system łączy się z wybraną siecią Wi‑Fi.
 
+Uwaga:
+- W trybie AP skanowanie sieci przez WebUI może być niedostępne, bo `wlan0` jest
+  przełączony w tryb punktu dostępowego. Dlatego lista sieci pochodzi z cache
+  zapisanego *przed* uruchomieniem AP.
+- Cache skanu zapisywany jest domyślnie w `/tmp/cnc-wifi-scan.txt`
+  (konfigurowalne przez `WIFI_SCAN_CACHE`).
+
 Powrót do normalnego trybu klienta Wi-Fi:
 - uzupełnij konfigurację Wi-Fi (NetworkManager),
 - wykonaj restart systemu (po restarcie AP nie uruchomi się, jeśli Wi-Fi zadziała).
@@ -73,6 +80,10 @@ Parametry środowiskowe:
 - `AP_TEST_TIME` – czas utrzymania AP w sekundach (domyślnie `180`).
 - `WIFI_CONNECT_TIMEOUT` – timeout na powrót Wi‑Fi (domyślnie `60`).
 - `POLL_INTERVAL` – interwał sprawdzania stanu (domyślnie `3`).
+- `WIFI_SCAN_CACHE` – ścieżka cache skanu Wi‑Fi (domyślnie `/tmp/cnc-wifi-scan.txt`).
+
+Skrypt testowy zapisuje cache skanu tuż przed przełączeniem w tryb AP, aby
+odwzorować zachowanie trybu awaryjnego.
 
 ## PolicyKit (restart GUI)
 

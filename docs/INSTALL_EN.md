@@ -54,6 +54,12 @@ In AP mode the WebUI shows a cached list of Wi‑Fi networks captured just befor
 switching to AP, and also allows manual SSID/password entry. After confirmation
 the AP is stopped automatically and the system connects to the chosen network.
 
+Note:
+- In AP mode scanning from the WebUI may be unavailable because `wlan0` is
+  running as an access point. The list comes from a cache saved *before* AP.
+- The scan cache is stored in `/tmp/cnc-wifi-scan.txt` by default
+  (configurable via `WIFI_SCAN_CACHE`).
+
 Return to normal Wi-Fi client mode:
 - complete Wi-Fi setup (NetworkManager),
 - reboot the system (after reboot the AP will not start if Wi-Fi is up).
@@ -73,6 +79,10 @@ Environment parameters:
 - `AP_TEST_TIME` – AP hold time in seconds (default `180`).
 - `WIFI_CONNECT_TIMEOUT` – Wi‑Fi restore timeout (default `60`).
 - `POLL_INTERVAL` – status polling interval (default `3`).
+- `WIFI_SCAN_CACHE` – Wi‑Fi scan cache path (default `/tmp/cnc-wifi-scan.txt`).
+
+The test script saves the scan cache right before switching to AP to mirror the
+fallback behavior.
 
 ## PolicyKit (GUI restart)
 
