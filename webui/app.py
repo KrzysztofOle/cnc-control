@@ -1896,30 +1896,32 @@ def git_pull():
 
 @app.route("/git-pull-plain", methods=["POST"])
 def git_pull_plain():
-    branch, branch_error = get_current_branch()
-    if branch_error:
-        return redirect_to_next(branch_error)
-    if branch == "":
-        default_branch, default_error = get_default_remote_branch()
-        if default_error:
-            return redirect_to_next(default_error)
-        # PL: Repo jest w trybie detached HEAD (np. po checkout taga).
-        # EN: Repo is in detached HEAD (e.g. after tag checkout).
+    # PL: Zawsze przechodzimy na main przed git pull.
+    # EN: Always switch to main before git pull.
+    target_branch = "main"
+    fetch_result, _, fetch_err = run_git_command(
+        ["git", "fetch", "origin", target_branch],
+        CONTROL_REPO_DIR,
+        f"git fetch origin {target_branch}",
+    )
+    if fetch_result.returncode != 0:
+        return redirect_to_next(f"Blad git fetch: {fetch_err}")
+
+    checkout_result, _, checkout_err = run_git_command(
+        ["git", "checkout", target_branch],
+        CONTROL_REPO_DIR,
+        f"git checkout {target_branch}",
+    )
+    if checkout_result.returncode != 0:
+        # PL: Tworzymy lub nadpisujemy lokalna galez z origin/main.
+        # EN: Create or reset local branch from origin/main.
         checkout_result, _, checkout_err = run_git_command(
-            ["git", "checkout", default_branch],
+            ["git", "checkout", "-B", target_branch, f"origin/{target_branch}"],
             CONTROL_REPO_DIR,
-            f"git checkout {default_branch}",
+            f"git checkout -B {target_branch} origin/{target_branch}",
         )
         if checkout_result.returncode != 0:
-            # PL: Tworzymy lub nadpisujemy lokalna galez z origin/<branch>.
-            # EN: Create or reset local branch from origin/<branch>.
-            checkout_result, _, checkout_err = run_git_command(
-                ["git", "checkout", "-B", default_branch, f"origin/{default_branch}"],
-                CONTROL_REPO_DIR,
-                f"git checkout -B {default_branch} origin/{default_branch}",
-            )
-            if checkout_result.returncode != 0:
-                return redirect_to_next(f"Blad git checkout: {checkout_err}")
+            return redirect_to_next(f"Blad git checkout: {checkout_err}")
 
     result, stdout, stderr = run_git_command(
         ["git", "pull"],
