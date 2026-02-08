@@ -108,8 +108,15 @@ fi
 chown root:root "${ENV_DEST}"
 chmod 644 "${ENV_DEST}"
 
-chown root:root /var/lib/cnc-control "${SAMBA_SHARE_PATH}"
-chmod 755 "${SAMBA_SHARE_PATH}"
+chown root:root /var/lib/cnc-control
+chmod 755 /var/lib/cnc-control
+
+if mountpoint -q "${SAMBA_SHARE_PATH}"; then
+    echo "[INFO] ${SAMBA_SHARE_PATH} jest zamontowany – pomijam chown"
+else
+    chown root:root "${SAMBA_SHARE_PATH}"
+    chmod 755 "${SAMBA_SHARE_PATH}"
+fi
 
 install -o root -g root -m 644 "${SYSTEMD_SERVICE_SRC}" "${SYSTEMD_SERVICE_DEST}"
 install -o root -g root -m 644 "${SYSTEMD_AP_SERVICE_SRC}" "${SYSTEMD_AP_SERVICE_DEST}"
