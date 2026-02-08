@@ -6,6 +6,7 @@ WIFI_DEVICE="${WIFI_DEVICE:-wlan0}"
 WIFI_CONNECT_TIMEOUT="${WIFI_CONNECT_TIMEOUT:-45}"
 POLL_INTERVAL="${POLL_INTERVAL:-3}"
 AP_SERVICE="${AP_SERVICE:-cnc-ap.service}"
+WIFI_SCAN_CACHE="${WIFI_SCAN_CACHE:-/tmp/cnc-wifi-scan.txt}"
 
 log() {
   local msg="$1"
@@ -50,6 +51,24 @@ start_ap() {
   return 1
 }
 
+save_wifi_scan_cache() {
+  if [ ! -x "${NMCLI_BIN}" ]; then
+    log "Brak nmcli. Pomijam zapis cache skanowania Wi-Fi."
+    return 0
+  fi
+
+  log "Zapisuje liste sieci Wi-Fi do cache: ${WIFI_SCAN_CACHE}"
+  if "${NMCLI_BIN}" -t -f IN-USE,SSID,SECURITY,SIGNAL dev wifi list > "${WIFI_SCAN_CACHE}.tmp" 2>/dev/null; then
+    mv "${WIFI_SCAN_CACHE}.tmp" "${WIFI_SCAN_CACHE}"
+    chmod 644 "${WIFI_SCAN_CACHE}" || true
+    return 0
+  fi
+
+  rm -f "${WIFI_SCAN_CACHE}.tmp" || true
+  log "Nie udalo sie zapisac cache skanowania Wi-Fi."
+  return 1
+}
+
 if [ "${EUID}" -ne 0 ]; then
   log "Skrypt musi byc uruchomiony jako root."
   exit 1
@@ -82,4 +101,5 @@ while [ "$(date +%s)" -lt "${deadline_ts}" ]; do
 done
 
 log "Brak polaczenia Wi-Fi po ${WIFI_CONNECT_TIMEOUT}s."
+save_wifi_scan_cache || true
 start_ap

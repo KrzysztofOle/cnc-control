@@ -50,6 +50,10 @@ The default Wi-Fi wait timeout is `45` seconds. You can change it via
 
 Connecting to the AP allows Wi-Fi configuration and access to WebUI/SSH.
 
+In AP mode the WebUI shows a cached list of Wi‑Fi networks captured just before
+switching to AP, and also allows manual SSID/password entry. After confirmation
+the AP is stopped automatically and the system connects to the chosen network.
+
 Return to normal Wi-Fi client mode:
 - complete Wi-Fi setup (NetworkManager),
 - reboot the system (after reboot the AP will not start if Wi-Fi is up).

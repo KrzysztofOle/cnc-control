@@ -2,6 +2,8 @@
 set -euo pipefail
 
 NMCLI_BIN="/usr/bin/nmcli"
+AP_SERVICE="${AP_SERVICE:-cnc-ap.service}"
+WIFI_DEVICE="${WIFI_DEVICE:-wlan0}"
 
 usage() {
   echo "Uzycie: wifi_control.sh scan | wifi_control.sh connect <ssid> <password>" >&2
@@ -47,6 +49,11 @@ case "${command}" in
     if [[ -z "${password}" ]]; then
       fail 3 "Haslo nie moze byc puste."
     fi
+    if command -v systemctl >/dev/null 2>&1; then
+      sudo -n systemctl stop "${AP_SERVICE}" >/dev/null 2>&1 || true
+    fi
+    sudo -n "${NMCLI_BIN}" device set "${WIFI_DEVICE}" managed yes >/dev/null 2>&1 || true
+    sudo -n "${NMCLI_BIN}" radio wifi on >/dev/null 2>&1 || true
     exec sudo -n "${NMCLI_BIN}" dev wifi connect "${ssid}" password "${password}"
     ;;
   *)

@@ -39,6 +39,10 @@ WIFI_CONTROL_SCRIPT = os.environ.get(
     "CNC_WIFI_CONTROL_SCRIPT",
     os.path.join(REPO_ROOT, "tools", "wifi_control.sh"),
 )
+WIFI_SCAN_CACHE = os.environ.get(
+    "CNC_WIFI_SCAN_CACHE",
+    "/tmp/cnc-wifi-scan.txt",
+)
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     "/home/andrzej/cnc-control",
@@ -324,6 +328,7 @@ body.ui-busy #loading-overlay * {
   <div class="wifi-row">
     <button type="button" id="wifi-scan">Skanuj</button>
     <select id="wifi-ssid" disabled></select>
+    <input type="text" id="wifi-ssid-custom" placeholder="Nazwa sieci (SSID)" autocomplete="off" style="display:none;">
   </div>
   <div class="wifi-row">
     <label for="wifi-password">Hasło</label>
@@ -616,6 +621,7 @@ body.ui-busy #loading-overlay * {
       return;
     }
     const wifiSelect = document.getElementById("wifi-ssid");
+    const wifiCustomInput = document.getElementById("wifi-ssid-custom");
     const wifiPassword = document.getElementById("wifi-password");
     const wifiConnectButton = document.getElementById("wifi-connect");
     const wifiStatus = document.getElementById("wifi-status");
@@ -635,43 +641,50 @@ body.ui-busy #loading-overlay * {
       }
     }
 
-    function renderWifiNetworks(networks) {
+    function setCustomVisible(visible) {
+      if (!wifiCustomInput) {
+        return;
+      }
+      wifiCustomInput.style.display = visible ? "inline-block" : "none";
+      if (!visible) {
+        wifiCustomInput.value = "";
+      }
+    }
+
+    function renderWifiNetworks(networks, cachedAt) {
       if (!wifiSelect || !wifiConnectButton) {
         return;
       }
       const previous = wifiSelect.value;
       wifiSelect.innerHTML = "";
-      if (!Array.isArray(networks) || networks.length === 0) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "Brak wykrytych sieci";
-        wifiSelect.appendChild(option);
-        wifiSelect.disabled = true;
-        wifiConnectButton.disabled = true;
-        return;
+      if (Array.isArray(networks)) {
+        networks.forEach((network) => {
+          const option = document.createElement("option");
+          option.value = network.ssid || "";
+          const parts = [];
+          if (typeof network.signal === "number") {
+            parts.push(network.signal + "%");
+          }
+          parts.push(network.secure ? "zabezpieczona" : "otwarta");
+          if (network.in_use) {
+            parts.push("połączono");
+          }
+          let label = network.ssid || "Nieznana sieć";
+          if (parts.length > 0) {
+            label += " (" + parts.join(", ") + ")";
+          }
+          option.textContent = label;
+          if (network.in_use) {
+            option.selected = true;
+          }
+          wifiSelect.appendChild(option);
+        });
       }
 
-      networks.forEach((network) => {
-        const option = document.createElement("option");
-        option.value = network.ssid || "";
-        const parts = [];
-        if (typeof network.signal === "number") {
-          parts.push(network.signal + "%");
-        }
-        parts.push(network.secure ? "zabezpieczona" : "otwarta");
-        if (network.in_use) {
-          parts.push("połączono");
-        }
-        let label = network.ssid || "Nieznana sieć";
-        if (parts.length > 0) {
-          label += " (" + parts.join(", ") + ")";
-        }
-        option.textContent = label;
-        if (network.in_use) {
-          option.selected = true;
-        }
-        wifiSelect.appendChild(option);
-      });
+      const customOption = document.createElement("option");
+      customOption.value = "__custom__";
+      customOption.textContent = "Inna sieć...";
+      wifiSelect.appendChild(customOption);
 
       if (previous) {
         const previousOption = Array.from(wifiSelect.options).find(
@@ -682,8 +695,26 @@ body.ui-busy #loading-overlay * {
         }
       }
 
+      if (!wifiSelect.value) {
+        wifiSelect.value = "__custom__";
+      }
+      setCustomVisible(wifiSelect.value === "__custom__");
+
       wifiSelect.disabled = false;
       wifiConnectButton.disabled = false;
+      if (cachedAt) {
+        setWifiStatus("Zapisane sieci (z " + cachedAt + ").", "muted");
+      }
+    }
+
+    function normalizeNetworksPayload(payload) {
+      if (Array.isArray(payload)) {
+        return { networks: payload, cachedAt: null };
+      }
+      if (payload && Array.isArray(payload.networks)) {
+        return { networks: payload.networks, cachedAt: payload.cached_at || null };
+      }
+      return { networks: [], cachedAt: null };
     }
 
     async function scanWifi() {
@@ -708,15 +739,39 @@ body.ui-busy #loading-overlay * {
         errorMessage = error.message || "Błąd skanowania Wi-Fi.";
       }
       setBusy(false);
-      if (errorMessage) {
+      if (!errorMessage) {
+        const normalized = normalizeNetworksPayload(payload);
+        renderWifiNetworks(normalized.networks, normalized.cachedAt);
+        if (normalized.networks.length > 0) {
+          setWifiStatus("Znaleziono sieci: " + normalized.networks.length + ".", "ok");
+        } else {
+          setWifiStatus("Brak dostępnych sieci.", "muted");
+        }
+        return;
+      }
+
+      let cachedPayload = null;
+      try {
+        const cachedResponse = await fetch("/wifi/scan-cached", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!cachedResponse.ok) {
+          throw new Error("Brak zapisanego skanu Wi-Fi.");
+        }
+        cachedPayload = await cachedResponse.json();
+      } catch (cachedError) {
         setWifiStatus(errorMessage, "error");
         return;
       }
-      renderWifiNetworks(payload);
-      if (Array.isArray(payload) && payload.length > 0) {
-        setWifiStatus("Znaleziono sieci: " + payload.length + ".", "ok");
+
+      const normalized = normalizeNetworksPayload(cachedPayload);
+      renderWifiNetworks(normalized.networks, normalized.cachedAt);
+      if (normalized.networks.length > 0) {
+        setWifiStatus("Użyto zapisanego skanu sieci.", "muted");
       } else {
-        setWifiStatus("Brak dostępnych sieci.", "muted");
+        setWifiStatus("Brak dostępnych sieci (cache).", "muted");
       }
     }
 
@@ -724,7 +779,8 @@ body.ui-busy #loading-overlay * {
       if (busy || !wifiSelect || !wifiPassword) {
         return;
       }
-      const ssid = wifiSelect.value || "";
+      const selected = wifiSelect.value || "";
+      const ssid = selected === "__custom__" && wifiCustomInput ? wifiCustomInput.value.trim() : selected;
       const password = wifiPassword.value || "";
       if (!ssid) {
         setWifiStatus("Wybierz sieć Wi-Fi.", "error");
@@ -769,10 +825,50 @@ body.ui-busy #loading-overlay * {
       }
     }
 
+    if (wifiSelect) {
+      wifiSelect.addEventListener("change", () => {
+        const isCustom = wifiSelect.value === "__custom__";
+        setCustomVisible(isCustom);
+      });
+    }
+
+    if (wifiCustomInput) {
+      wifiCustomInput.addEventListener("input", () => {
+        if (!wifiSelect) {
+          return;
+        }
+        if (wifiSelect.value !== "__custom__") {
+          return;
+        }
+      });
+    }
+
     wifiScanButton.addEventListener("click", scanWifi);
     if (wifiConnectButton) {
       wifiConnectButton.addEventListener("click", connectWifi);
     }
+    (async () => {
+      try {
+        const cachedResponse = await fetch("/wifi/scan-cached", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!cachedResponse.ok) {
+          return;
+        }
+        const cachedPayload = await cachedResponse.json();
+        const normalized = normalizeNetworksPayload(cachedPayload);
+        if (normalized.networks.length === 0) {
+          return;
+        }
+        renderWifiNetworks(normalized.networks, normalized.cachedAt);
+        setWifiStatus("Zapisane sieci z ostatniego skanu.", "muted");
+      } catch (error) {
+        // PL: Brak cache to normalna sytuacja.
+        // EN: Missing cache is a normal case.
+      }
+    })();
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -907,6 +1003,27 @@ def parse_wifi_scan_output(output):
     result = list(networks.values())
     result.sort(key=lambda item: (not item["in_use"], -item["signal"], item["ssid"].casefold()))
     return result
+
+
+def read_cached_wifi_scan():
+    # PL: Odczytujemy zapisany skan z trybu AP, jeśli jest dostępny.
+    # EN: Read cached scan from AP mode, if available.
+    if not os.path.isfile(WIFI_SCAN_CACHE):
+        return None, None
+    try:
+        with open(WIFI_SCAN_CACHE, "r", encoding="utf-8") as handle:
+            output = handle.read()
+    except OSError:
+        app.logger.warning("Nie mozna odczytac cache skanowania Wi-Fi.")
+        return None, None
+
+    networks = parse_wifi_scan_output(output)
+    try:
+        cached_ts = datetime.fromtimestamp(os.path.getmtime(WIFI_SCAN_CACHE))
+        cached_at = cached_ts.isoformat(sep=" ", timespec="seconds")
+    except OSError:
+        cached_at = None
+    return networks, cached_at
 
 
 def run_wifi_control(args, timeout=20):
@@ -1309,6 +1426,13 @@ def wifi_scan():
 
     networks = parse_wifi_scan_output(result.stdout or "")
     return jsonify(networks)
+
+@app.route("/wifi/scan-cached", methods=["GET"])
+def wifi_scan_cached():
+    networks, cached_at = read_cached_wifi_scan()
+    if networks is None:
+        return jsonify({"error": "Brak zapisanego skanu"}), 404
+    return jsonify({"networks": networks, "cached_at": cached_at})
 
 @app.route("/wifi/connect", methods=["POST"])
 def wifi_connect():

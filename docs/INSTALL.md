@@ -50,6 +50,10 @@ zmienną `WIFI_CONNECT_TIMEOUT` w `/etc/cnc-control/cnc-control.env`.
 
 Połączenie z AP umożliwia konfigurację sieci przez Wi-Fi oraz dostęp do WebUI/SSH.
 
+W trybie AP WebUI pokazuje listę sieci zapamiętaną tuż przed przełączeniem do AP
+oraz umożliwia ręczne wpisanie SSID i hasła. Po zatwierdzeniu połączenia AP jest
+automatycznie wyłączany, a system łączy się z wybraną siecią Wi‑Fi.
+
 Powrót do normalnego trybu klienta Wi-Fi:
 - uzupełnij konfigurację Wi-Fi (NetworkManager),
 - wykonaj restart systemu (po restarcie AP nie uruchomi się, jeśli Wi-Fi zadziała).
