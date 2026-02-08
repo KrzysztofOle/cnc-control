@@ -45,8 +45,8 @@ validate_inputs() {
   if ! command -v systemctl >/dev/null 2>&1; then
     fail 127 "Brak systemctl (systemd)."
   fi
-  if ! systemctl list-unit-files --type=service | grep -q "^${AP_SERVICE}"; then
-    fail 4 "Brak unita systemd: ${AP_SERVICE}."
+  if ! systemctl cat "${AP_SERVICE}" >/dev/null 2>&1; then
+    fail 4 "Brak unita systemd lub problem z systemd: ${AP_SERVICE}."
   fi
 }
 
