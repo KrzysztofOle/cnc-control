@@ -16,31 +16,32 @@ log() {
 }
 
 start_ap() {
-  if systemctl is-active --quiet "${AP_SERVICE}"; then
-    log "Tryb AP jest juz aktywny (${AP_SERVICE})."
-    return 0
-  fi
-
-  if ! systemctl list-unit-files --type=service | grep -q "^${AP_SERVICE}"; then
-    log "Brak unita ${AP_SERVICE}."
+  if [ ! -f "/etc/systemd/system/${AP_SERVICE}" ]; then
+    log "Brak pliku unita ${AP_SERVICE}."
     return 1
   fi
 
   if [ -x "${NMCLI_BIN}" ]; then
-    log "Odlaczanie ${WIFI_DEVICE} od NetworkManager (bez zatrzymywania uslugi)"
-    "${NMCLI_BIN}" device disconnect "${WIFI_DEVICE}" >/dev/null 2>&1 || true
-    "${NMCLI_BIN}" device set "${WIFI_DEVICE}" managed no >/dev/null 2>&1 || true
+    echo "[wifi-fallback] Odłączanie wlan0 od NetworkManager"
+    nmcli device disconnect wlan0 || true
+    nmcli device set wlan0 managed no || true
+    sleep 1
   else
     log "Brak nmcli. Pomijam odlaczanie ${WIFI_DEVICE} od NetworkManager."
+  fi
+
+  if ! ip -4 addr show dev wlan0 | grep -q "inet "; then
+    ip addr flush dev wlan0 || true
+    ip addr add 192.168.50.1/24 dev wlan0
+    ip link set wlan0 up
   fi
 
   log "Zatrzymywanie domyslnych uslug hostapd/dnsmasq"
   systemctl stop hostapd.service >/dev/null 2>&1 || true
   systemctl stop dnsmasq.service >/dev/null 2>&1 || true
 
-  log "Uruchamianie ${AP_SERVICE}"
+  log "Uruchamiam ${AP_SERVICE}"
   if systemctl start "${AP_SERVICE}"; then
-    systemctl status --no-pager "${AP_SERVICE}" || true
     log "Tryb AP uruchomiony."
     return 0
   fi
