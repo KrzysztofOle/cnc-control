@@ -7,6 +7,7 @@ AP_SERVICE="${AP_SERVICE:-cnc-ap.service}"
 AP_TEST_TIME="${AP_TEST_TIME:-180}"
 WIFI_CONNECT_TIMEOUT="${WIFI_CONNECT_TIMEOUT:-60}"
 POLL_INTERVAL="${POLL_INTERVAL:-3}"
+ACTIVE_CONNECTION=""
 
 log() {
   local msg="$1"
@@ -102,6 +103,11 @@ restore_networkmanager() {
   log "Przywracanie ${WIFI_DEVICE} pod NetworkManager"
   "${NMCLI_BIN}" device set "${WIFI_DEVICE}" managed yes
   "${NMCLI_BIN}" radio wifi on >/dev/null 2>&1 || true
+  "${NMCLI_BIN}" dev wifi rescan >/dev/null 2>&1 || true
+  if [ -n "${ACTIVE_CONNECTION}" ]; then
+    log "Proba polaczenia z poprzednim profilem: ${ACTIVE_CONNECTION}"
+    "${NMCLI_BIN}" connection up "${ACTIVE_CONNECTION}" >/dev/null 2>&1 || true
+  fi
   "${NMCLI_BIN}" device connect "${WIFI_DEVICE}" >/dev/null 2>&1 || true
 
   local deadline_ts
@@ -124,6 +130,13 @@ restore_networkmanager() {
 main() {
   require_root
   validate_inputs
+
+  ACTIVE_CONNECTION="$("${NMCLI_BIN}" -t -f DEVICE,CONNECTION dev status 2>/dev/null | grep "^${WIFI_DEVICE}:" | cut -d: -f2- | head -n 1 || true)"
+  if [ -n "${ACTIVE_CONNECTION}" ] && [ "${ACTIVE_CONNECTION}" != "--" ]; then
+    log "Wykryto aktywny profil: ${ACTIVE_CONNECTION}"
+  else
+    ACTIVE_CONNECTION=""
+  fi
 
   log "Start testu AP (czas=${AP_TEST_TIME}s, device=${WIFI_DEVICE}, unit=${AP_SERVICE})."
 
