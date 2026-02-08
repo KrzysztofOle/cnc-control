@@ -54,6 +54,22 @@ Return to normal Wi-Fi client mode:
 - complete Wi-Fi setup (NetworkManager),
 - reboot the system (after reboot the AP will not start if Wi-Fi is up).
 
+## AP cycle test (no reboot)
+
+The `tools/test_ap_cycle.sh` script switches `wlan0` into AP mode for a defined
+time, then restores NetworkManager and reconnects Wi‑Fi.
+
+Example with a longer AP duration (seconds):
+
+```bash
+sudo AP_TEST_TIME=300 tools/test_ap_cycle.sh
+```
+
+Environment parameters:
+- `AP_TEST_TIME` – AP hold time in seconds (default `180`).
+- `WIFI_CONNECT_TIMEOUT` – Wi‑Fi restore timeout (default `60`).
+- `POLL_INTERVAL` – status polling interval (default `3`).
+
 ## PolicyKit (GUI restart)
 
 The `tools/setup_system.sh` script installs a PolicyKit rule that allows the

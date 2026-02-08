@@ -54,6 +54,22 @@ Powrót do normalnego trybu klienta Wi-Fi:
 - uzupełnij konfigurację Wi-Fi (NetworkManager),
 - wykonaj restart systemu (po restarcie AP nie uruchomi się, jeśli Wi-Fi zadziała).
 
+## Test cyklu AP (bez restartu)
+
+Skrypt `tools/test_ap_cycle.sh` przełącza `wlan0` w tryb AP na określony czas,
+a następnie automatycznie przywraca NetworkManager i łączy z Wi‑Fi.
+
+Przykładowe uruchomienie z dłuższym czasem AP (sekundy):
+
+```bash
+sudo AP_TEST_TIME=300 tools/test_ap_cycle.sh
+```
+
+Parametry środowiskowe:
+- `AP_TEST_TIME` – czas utrzymania AP w sekundach (domyślnie `180`).
+- `WIFI_CONNECT_TIMEOUT` – timeout na powrót Wi‑Fi (domyślnie `60`).
+- `POLL_INTERVAL` – interwał sprawdzania stanu (domyślnie `3`).
+
 ## PolicyKit (restart GUI)
 
 Skrypt `tools/setup_system.sh` instaluje regułę PolicyKit, która pozwala
