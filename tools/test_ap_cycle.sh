@@ -7,6 +7,7 @@ AP_SERVICE="${AP_SERVICE:-cnc-ap.service}"
 AP_TEST_TIME="${AP_TEST_TIME:-180}"
 WIFI_CONNECT_TIMEOUT="${WIFI_CONNECT_TIMEOUT:-60}"
 POLL_INTERVAL="${POLL_INTERVAL:-3}"
+WIFI_SCAN_CACHE="${WIFI_SCAN_CACHE:-/tmp/cnc-wifi-scan.txt}"
 ACTIVE_CONNECTION=""
 
 log() {
@@ -74,6 +75,18 @@ cleanup() {
 
 trap cleanup EXIT
 
+save_wifi_scan_cache() {
+  log "Zapisuje liste sieci Wi-Fi do cache: ${WIFI_SCAN_CACHE}"
+  if "${NMCLI_BIN}" -t -f IN-USE,SSID,SECURITY,SIGNAL dev wifi list > "${WIFI_SCAN_CACHE}.tmp" 2>/dev/null; then
+    mv "${WIFI_SCAN_CACHE}.tmp" "${WIFI_SCAN_CACHE}"
+    chmod 644 "${WIFI_SCAN_CACHE}" || true
+    return 0
+  fi
+  rm -f "${WIFI_SCAN_CACHE}.tmp" || true
+  log "Nie udalo sie zapisac cache skanowania Wi-Fi."
+  return 1
+}
+
 start_ap() {
   log "Odłączanie ${WIFI_DEVICE} od NetworkManager"
   "${NMCLI_BIN}" device disconnect "${WIFI_DEVICE}" >/dev/null 2>&1 || true
@@ -140,6 +153,7 @@ main() {
 
   log "Start testu AP (czas=${AP_TEST_TIME}s, device=${WIFI_DEVICE}, unit=${AP_SERVICE})."
 
+  save_wifi_scan_cache || true
   start_ap
   log "Utrzymuje AP przez ${AP_TEST_TIME}s..."
   sleep "${AP_TEST_TIME}"
