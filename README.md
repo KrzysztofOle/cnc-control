@@ -18,6 +18,7 @@ Projekt jest rozwijany hobbystycznie, z naciskiem na **praktyczne zastosowanie w
 - 📂 zarządzanie plikami G-code
 - 🔌 komunikacja z urządzeniami USB / siecią lokalną
 - ⚙️ skrypty pomocnicze dla Raspberry Pi
+- 📶 awaryjny tryb Wi-Fi (AP `CNC-SETUP`) do konfiguracji sieci
 - 🧪 testy kompatybilności sprzętowej (zasilanie, peryferia)
 
 > ⚠️ Projekt **nie ingeruje** w logikę PLC sterownika RichAuto – pełni rolę systemu wspomagającego.

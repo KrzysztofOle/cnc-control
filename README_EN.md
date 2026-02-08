@@ -19,6 +19,7 @@ The project is developed as a **practical workshop-oriented solution**, not as a
 - 📂 G-code file management
 - 🔌 Communication via USB devices / local network
 - ⚙️ Helper scripts for Raspberry Pi
+- 📶 Emergency Wi-Fi mode (AP `CNC-SETUP`) for network setup
 - 🧪 Hardware compatibility testing (power, peripherals)
 
 > ⚠️ The project **does not interfere** with RichAuto controller PLC logic.  

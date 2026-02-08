@@ -32,6 +32,28 @@ Skrypt `tools/setup_system.sh` kopiuje tam domyślny plik `config/cnc-control.en
 - `CNC_MOUNT_POINT` – punkt montowania obrazu (upload G-code).
 - `CNC_UPLOAD_DIR` – katalog, do którego WebUI zapisuje pliki.
 
+## Awaryjny tryb Wi-Fi (Access Point)
+
+Po starcie systemu usługa `cnc-wifi-fallback.service` przez określony czas
+oczekuje na połączenie Wi-Fi zestawione przez NetworkManager. Jeśli połączenie
+nie powstanie, uruchamiany jest tryb Access Point (`cnc-ap.service`).
+
+Parametry AP:
+- SSID: `CNC-SETUP`
+- Hasło: `cnc-setup-1234` (WPA2-PSK)
+- Adres IP: `192.168.50.1/24`
+- DHCP: `192.168.50.10-192.168.50.50`
+- Interfejs: `wlan0`
+
+Domyślny timeout oczekiwania na Wi-Fi to `45` sekund. Możesz go zmienić przez
+zmienną `WIFI_CONNECT_TIMEOUT` w `/etc/cnc-control/cnc-control.env`.
+
+Połączenie z AP umożliwia konfigurację sieci przez Wi-Fi oraz dostęp do WebUI/SSH.
+
+Powrót do normalnego trybu klienta Wi-Fi:
+- uzupełnij konfigurację Wi-Fi (NetworkManager),
+- wykonaj restart systemu (po restarcie AP nie uruchomi się, jeśli Wi-Fi zadziała).
+
 ## PolicyKit (restart GUI)
 
 Skrypt `tools/setup_system.sh` instaluje regułę PolicyKit, która pozwala

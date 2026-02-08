@@ -1,0 +1,12 @@
+[Unit]
+Description=CNC Control Access Point (fallback)
+After=network.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/ip link set wlan0 up
+ExecStartPre=/usr/sbin/ip addr flush dev wlan0
+ExecStartPre=/usr/sbin/ip addr add 192.168.50.1/24 dev wlan0
+ExecStart=/bin/bash -c '/usr/sbin/hostapd /etc/cnc-control/ap/hostapd.conf & exec /usr/sbin/dnsmasq --conf-file=/etc/cnc-control/ap/dnsmasq.conf --no-daemon'
+Restart=on-failure
+RestartSec=3

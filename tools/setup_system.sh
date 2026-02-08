@@ -11,10 +11,21 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 SYSTEMD_SERVICE_SRC="${REPO_ROOT}/systemd/cnc-webui.service"
 SYSTEMD_SERVICE_DEST="/etc/systemd/system/cnc-webui.service"
+SYSTEMD_AP_SERVICE_SRC="${REPO_ROOT}/systemd/cnc-ap.service"
+SYSTEMD_AP_SERVICE_DEST="/etc/systemd/system/cnc-ap.service"
+SYSTEMD_WIFI_FALLBACK_SRC="${REPO_ROOT}/systemd/cnc-wifi-fallback.service"
+SYSTEMD_WIFI_FALLBACK_DEST="/etc/systemd/system/cnc-wifi-fallback.service"
+WIFI_FALLBACK_SCRIPT="${REPO_ROOT}/tools/wifi_fallback.sh"
 POLKIT_RULE_SRC="${REPO_ROOT}/systemd/polkit/50-cnc-webui-restart.rules"
 POLKIT_RULE_DEST="/etc/polkit-1/rules.d/50-cnc-webui-restart.rules"
 ENV_SRC="${REPO_ROOT}/config/cnc-control.env.example"
 ENV_DEST="/etc/cnc-control/cnc-control.env"
+AP_CONFIG_SRC_DIR="${REPO_ROOT}/config/ap"
+HOSTAPD_CONF_SRC="${AP_CONFIG_SRC_DIR}/hostapd.conf"
+DNSMASQ_CONF_SRC="${AP_CONFIG_SRC_DIR}/dnsmasq.conf"
+AP_CONFIG_DEST_DIR="/etc/cnc-control/ap"
+HOSTAPD_CONF_DEST="${AP_CONFIG_DEST_DIR}/hostapd.conf"
+DNSMASQ_CONF_DEST="${AP_CONFIG_DEST_DIR}/dnsmasq.conf"
 OVERRIDE_DIR="/etc/systemd/system/cnc-webui.service.d"
 OVERRIDE_FILE="${OVERRIDE_DIR}/override.conf"
 SAMBA_CONF="/etc/samba/smb.conf"
@@ -37,9 +48,55 @@ if [ ! -f "${SYSTEMD_SERVICE_SRC}" ]; then
     exit 1
 fi
 
+if [ ! -f "${SYSTEMD_AP_SERVICE_SRC}" ]; then
+    echo "Brak pliku unita: ${SYSTEMD_AP_SERVICE_SRC}"
+    exit 1
+fi
+
+if [ ! -f "${SYSTEMD_WIFI_FALLBACK_SRC}" ]; then
+    echo "Brak pliku unita: ${SYSTEMD_WIFI_FALLBACK_SRC}"
+    exit 1
+fi
+
 if [ ! -f "${ENV_SRC}" ]; then
     echo "Brak pliku konfiguracyjnego: ${ENV_SRC}"
     exit 1
+fi
+
+if [ ! -f "${WIFI_FALLBACK_SCRIPT}" ]; then
+    echo "Brak skryptu: ${WIFI_FALLBACK_SCRIPT}"
+    exit 1
+fi
+
+if [ ! -f "${HOSTAPD_CONF_SRC}" ]; then
+    echo "Brak pliku konfiguracyjnego: ${HOSTAPD_CONF_SRC}"
+    exit 1
+fi
+
+if [ ! -f "${DNSMASQ_CONF_SRC}" ]; then
+    echo "Brak pliku konfiguracyjnego: ${DNSMASQ_CONF_SRC}"
+    exit 1
+fi
+
+if command -v dpkg >/dev/null 2>&1; then
+    missing_pkgs=()
+    for pkg in hostapd dnsmasq; do
+        if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
+            missing_pkgs+=("${pkg}")
+        fi
+    done
+    if [ "${#missing_pkgs[@]}" -gt 0 ]; then
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "[INFO] Instalacja pakietow: ${missing_pkgs[*]}"
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_pkgs[@]}"
+        else
+            echo "Brak apt-get. Zainstaluj pakiety recznie: ${missing_pkgs[*]}"
+            exit 1
+        fi
+    fi
+else
+    echo "Brak dpkg. Pomijam sprawdzanie hostapd/dnsmasq."
 fi
 
 mkdir -p /etc/cnc-control /var/lib/cnc-control "${SAMBA_SHARE_PATH}"
@@ -55,6 +112,18 @@ chown root:root /var/lib/cnc-control "${SAMBA_SHARE_PATH}"
 chmod 755 "${SAMBA_SHARE_PATH}"
 
 install -o root -g root -m 644 "${SYSTEMD_SERVICE_SRC}" "${SYSTEMD_SERVICE_DEST}"
+install -o root -g root -m 644 "${SYSTEMD_AP_SERVICE_SRC}" "${SYSTEMD_AP_SERVICE_DEST}"
+install -o root -g root -m 644 "${SYSTEMD_WIFI_FALLBACK_SRC}" "${SYSTEMD_WIFI_FALLBACK_DEST}"
+
+chmod 755 "${WIFI_FALLBACK_SCRIPT}"
+
+mkdir -p "${AP_CONFIG_DEST_DIR}"
+if [ ! -f "${HOSTAPD_CONF_DEST}" ]; then
+    install -o root -g root -m 644 "${HOSTAPD_CONF_SRC}" "${HOSTAPD_CONF_DEST}"
+fi
+if [ ! -f "${DNSMASQ_CONF_DEST}" ]; then
+    install -o root -g root -m 644 "${DNSMASQ_CONF_SRC}" "${DNSMASQ_CONF_DEST}"
+fi
 
 if [ -f "${POLKIT_RULE_SRC}" ]; then
     mkdir -p "$(dirname "${POLKIT_RULE_DEST}")"
@@ -70,6 +139,18 @@ EnvironmentFile=/etc/cnc-control/cnc-control.env
 OVERRIDE
 
 systemctl daemon-reload
+
+# W trybie fallback uruchamiamy hostapd/dnsmasq tylko na zyczenie.
+echo "[INFO] Wylaczanie domyslnych uslug hostapd/dnsmasq"
+for svc in hostapd.service dnsmasq.service; do
+    if systemctl list-unit-files --type=service | grep -q "^${svc}"; then
+        systemctl disable --now "${svc}" || true
+    else
+        echo "[INFO] Pomijam brakujaca usluge: ${svc}"
+    fi
+done
+
+systemctl enable cnc-wifi-fallback.service
 
 # Raspberry Pi jako appliance CNC: cloud-init jest zbedny i spowalnia start.
 echo "[INFO] Wylaczanie cloud-init (uslugi i maskowanie)"

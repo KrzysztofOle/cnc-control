@@ -1,0 +1,12 @@
+[Unit]
+Description=CNC Control Wi-Fi fallback
+After=NetworkManager.service network.target
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/cnc-control/cnc-control.env
+ExecStart=/home/andrzej/cnc-control/tools/wifi_fallback.sh
+
+[Install]
+WantedBy=multi-user.target

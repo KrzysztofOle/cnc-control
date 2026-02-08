@@ -32,6 +32,28 @@ The `tools/setup_system.sh` script copies the default `config/cnc-control.env.ex
 - `CNC_MOUNT_POINT` – image mount point (G-code upload).
 - `CNC_UPLOAD_DIR` – directory where WebUI writes uploaded files.
 
+## Emergency Wi-Fi (Access Point)
+
+On boot, `cnc-wifi-fallback.service` waits for a Wi-Fi connection handled by
+NetworkManager. If no connection is established within the timeout, it starts
+the Access Point mode (`cnc-ap.service`).
+
+AP parameters:
+- SSID: `CNC-SETUP`
+- Password: `cnc-setup-1234` (WPA2-PSK)
+- IP address: `192.168.50.1/24`
+- DHCP range: `192.168.50.10-192.168.50.50`
+- Interface: `wlan0`
+
+The default Wi-Fi wait timeout is `45` seconds. You can change it via
+`WIFI_CONNECT_TIMEOUT` in `/etc/cnc-control/cnc-control.env`.
+
+Connecting to the AP allows Wi-Fi configuration and access to WebUI/SSH.
+
+Return to normal Wi-Fi client mode:
+- complete Wi-Fi setup (NetworkManager),
+- reboot the system (after reboot the AP will not start if Wi-Fi is up).
+
 ## PolicyKit (GUI restart)
 
 The `tools/setup_system.sh` script installs a PolicyKit rule that allows the
