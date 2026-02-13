@@ -7,6 +7,7 @@ WIFI_CONNECT_TIMEOUT="${WIFI_CONNECT_TIMEOUT:-45}"
 POLL_INTERVAL="${POLL_INTERVAL:-3}"
 AP_SERVICE="${AP_SERVICE:-cnc-ap.service}"
 WIFI_SCAN_CACHE="${WIFI_SCAN_CACHE:-/tmp/cnc-wifi-scan.txt}"
+AP_BLOCK_FLAG="${AP_BLOCK_FLAG:-/dev/shm/cnc-ap-blocked.flag}"
 
 log() {
   local msg="$1"
@@ -51,6 +52,10 @@ start_ap() {
   return 1
 }
 
+is_ap_blocked() {
+  [ -f "${AP_BLOCK_FLAG}" ]
+}
+
 save_wifi_scan_cache() {
   if [ ! -x "${NMCLI_BIN}" ]; then
     log "Brak nmcli. Pomijam zapis cache skanowania Wi-Fi."
@@ -75,6 +80,10 @@ if [ "${EUID}" -ne 0 ]; then
 fi
 
 if [ ! -x "${NMCLI_BIN}" ]; then
+  if is_ap_blocked; then
+    log "Brak nmcli pod ${NMCLI_BIN}, ale aktywna blokada AP (${AP_BLOCK_FLAG}). Pomijam AP."
+    exit 0
+  fi
   log "Brak nmcli pod ${NMCLI_BIN}. Przelaczam na tryb AP."
   start_ap
   exit $?
@@ -101,5 +110,9 @@ while [ "$(date +%s)" -lt "${deadline_ts}" ]; do
 done
 
 log "Brak polaczenia Wi-Fi po ${WIFI_CONNECT_TIMEOUT}s."
+if is_ap_blocked; then
+  log "Aktywna blokada AP (${AP_BLOCK_FLAG}). Pomijam uruchamianie trybu AP."
+  exit 0
+fi
 save_wifi_scan_cache || true
 start_ap

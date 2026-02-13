@@ -50,6 +50,21 @@ case "${command}" in
     fi
     ssid="$1"
     password="${2:-}"
+    previous_profile="$(
+      sudo -n "${NMCLI_BIN}" -g GENERAL.CONNECTION device show "${WIFI_DEVICE}" 2>/dev/null \
+        | head -n 1 \
+        | tr -d '\r' \
+        || true
+    )"
+    if [[ "${previous_profile}" == "--" ]]; then
+      previous_profile=""
+    fi
+    restore_previous_profile() {
+      if [[ -z "${previous_profile}" ]]; then
+        return 0
+      fi
+      sudo -n "${NMCLI_BIN}" --wait 20 connection up id "${previous_profile}" ifname "${WIFI_DEVICE}" >/dev/null 2>&1 || true
+    }
     if [[ -z "${ssid}" ]]; then
       fail 3 "SSID nie moze byc pusty."
     fi
@@ -84,8 +99,10 @@ case "${command}" in
         sleep 2
         continue
       fi
+      restore_previous_profile
       exit "${connect_rc}"
     done
+    restore_previous_profile
     exit "${connect_rc}"
     ;;
   connect-profile)
@@ -94,6 +111,24 @@ case "${command}" in
       exit 2
     fi
     profile_name="$1"
+    previous_profile="$(
+      sudo -n "${NMCLI_BIN}" -g GENERAL.CONNECTION device show "${WIFI_DEVICE}" 2>/dev/null \
+        | head -n 1 \
+        | tr -d '\r' \
+        || true
+    )"
+    if [[ "${previous_profile}" == "--" ]]; then
+      previous_profile=""
+    fi
+    restore_previous_profile() {
+      if [[ -z "${previous_profile}" ]]; then
+        return 0
+      fi
+      if [[ "${previous_profile}" == "${profile_name}" ]]; then
+        return 0
+      fi
+      sudo -n "${NMCLI_BIN}" --wait 20 connection up id "${previous_profile}" ifname "${WIFI_DEVICE}" >/dev/null 2>&1 || true
+    }
     if [[ -z "${profile_name}" ]]; then
       fail 3 "Nazwa profilu nie moze byc pusta."
     fi
@@ -114,8 +149,10 @@ case "${command}" in
         sleep 2
         continue
       fi
+      restore_previous_profile
       exit "${connect_rc}"
     done
+    restore_previous_profile
     exit "${connect_rc}"
     ;;
   delete-profile)

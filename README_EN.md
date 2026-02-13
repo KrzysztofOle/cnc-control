@@ -132,7 +132,9 @@ The WebUI provides a simple Wi-Fi configuration based on NetworkManager (`nmcli`
 Features:
 - quick switching to a saved profile without re-entering the password,
 - automatic password field lock for networks with a saved profile,
-- saved profile removal directly from WebUI.
+- saved profile removal directly from WebUI,
+- `AP block` switch (effective only until next reboot),
+- automatic fallback to the previous profile when a new connection attempt fails.
 
 Requirements:
 - NetworkManager installed and running (service `NetworkManager`)
@@ -198,6 +200,7 @@ Optional variables:
 | `CNC_WEBUI_LOG` | WebUI log file path | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | systemd unit name for webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Time range for `journalctl` (e.g. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
+| `CNC_AP_BLOCK_FLAG` | Path to temporary AP block flag file | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
 | `CNC_USB_MOUNT` | Legacy: USB mount point | none | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
 
 ---

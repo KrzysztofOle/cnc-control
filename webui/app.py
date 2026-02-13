@@ -43,6 +43,10 @@ WIFI_SCAN_CACHE = os.environ.get(
     "CNC_WIFI_SCAN_CACHE",
     "/tmp/cnc-wifi-scan.txt",
 )
+AP_BLOCK_FLAG = os.environ.get(
+    "CNC_AP_BLOCK_FLAG",
+    "/dev/shm/cnc-ap-blocked.flag",
+)
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     "/home/andrzej/cnc-control",
@@ -453,6 +457,14 @@ body.ui-busy #loading-overlay * {
     <button type="button" id="wifi-connect" disabled>Połącz</button>
     <button type="button" id="wifi-delete-profile" disabled>Usuń profil</button>
   </div>
+  <div class="wifi-row">
+    <label for="wifi-ap-block-toggle">Blokada AP</label>
+    <label class="toggle" aria-label="Blokada AP fallback">
+      <input type="checkbox" id="wifi-ap-block-toggle">
+      <span class="toggle-slider"></span>
+    </label>
+    <span id="wifi-ap-block-state" class="wifi-status wifi-status-muted">Status: nieznany</span>
+  </div>
   <div id="wifi-status" class="wifi-status wifi-status-muted">Status: bezczynny</div>
 </div>
 {% endif %}
@@ -744,6 +756,8 @@ body.ui-busy #loading-overlay * {
     const wifiConnectButton = document.getElementById("wifi-connect");
     const wifiDeleteProfileButton = document.getElementById("wifi-delete-profile");
     const wifiStatus = document.getElementById("wifi-status");
+    const wifiApBlockToggle = document.getElementById("wifi-ap-block-toggle");
+    const wifiApBlockState = document.getElementById("wifi-ap-block-state");
     let savedWifiSsids = new Set();
 
     function setWifiStatus(text, level) {
@@ -758,6 +772,21 @@ body.ui-busy #loading-overlay * {
         wifiStatus.classList.add("wifi-status-error");
       } else {
         wifiStatus.classList.add("wifi-status-muted");
+      }
+    }
+
+    function setApBlockStatus(text, level) {
+      if (!wifiApBlockState) {
+        return;
+      }
+      wifiApBlockState.textContent = text;
+      wifiApBlockState.classList.remove("wifi-status-ok", "wifi-status-error", "wifi-status-muted");
+      if (level === "ok") {
+        wifiApBlockState.classList.add("wifi-status-ok");
+      } else if (level === "error") {
+        wifiApBlockState.classList.add("wifi-status-error");
+      } else {
+        wifiApBlockState.classList.add("wifi-status-muted");
       }
     }
 
@@ -890,6 +919,72 @@ body.ui-busy #loading-overlay * {
         return { networks: payload.networks, cachedAt: payload.cached_at || null };
       }
       return { networks: [], cachedAt: null };
+    }
+
+    async function refreshApBlockState() {
+      if (!wifiApBlockToggle) {
+        return;
+      }
+      try {
+        const response = await fetch("/wifi/ap-block", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error("HTTP " + response.status);
+        }
+        const payload = await response.json();
+        const blocked = Boolean(payload && payload.blocked);
+        wifiApBlockToggle.checked = blocked;
+        if (blocked) {
+          setApBlockStatus("AP zablokowany do restartu.", "ok");
+        } else {
+          setApBlockStatus("AP fallback aktywny.", "muted");
+        }
+      } catch (error) {
+        setApBlockStatus("Nie można odczytać stanu blokady AP.", "error");
+      }
+    }
+
+    async function toggleApBlock() {
+      if (!wifiApBlockToggle) {
+        return;
+      }
+      const blocked = wifiApBlockToggle.checked;
+      setBusy(true, blocked ? "Włączanie blokady AP..." : "Wyłączanie blokady AP...");
+      try {
+        const response = await fetch("/wifi/ap-block", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ blocked: blocked }),
+        });
+        if (!response.ok) {
+          let message = "Nie udało się zmienić blokady AP.";
+          try {
+            const payload = await response.json();
+            if (payload && payload.error) {
+              message = payload.error;
+            }
+          } catch (payloadError) {
+            message = message + " (HTTP " + response.status + ").";
+          }
+          throw new Error(message);
+        }
+        if (blocked) {
+          setApBlockStatus("AP zablokowany do restartu.", "ok");
+        } else {
+          setApBlockStatus("AP fallback aktywny.", "muted");
+        }
+      } catch (error) {
+        wifiApBlockToggle.checked = !blocked;
+        setApBlockStatus(error.message || "Błąd zmiany blokady AP.", "error");
+      } finally {
+        setBusy(false);
+      }
     }
 
     async function scanWifi() {
@@ -1080,6 +1175,10 @@ body.ui-busy #loading-overlay * {
     }
     if (wifiDeleteProfileButton) {
       wifiDeleteProfileButton.addEventListener("click", deleteWifiProfile);
+    }
+    if (wifiApBlockToggle) {
+      wifiApBlockToggle.addEventListener("change", toggleApBlock);
+      refreshApBlockState();
     }
     refreshSavedWifiProfiles();
     (async () => {
@@ -1430,6 +1529,19 @@ def read_cached_wifi_scan():
     except OSError:
         cached_at = None
     return networks, cached_at
+
+
+def get_ap_block_state():
+    return os.path.isfile(AP_BLOCK_FLAG)
+
+
+def set_ap_block_state(blocked):
+    if blocked:
+        with open(AP_BLOCK_FLAG, "w", encoding="utf-8") as handle:
+            handle.write(f"blocked_at={datetime.now().isoformat(timespec='seconds')}\n")
+        return
+    if os.path.isfile(AP_BLOCK_FLAG):
+        os.remove(AP_BLOCK_FLAG)
 
 
 def run_wifi_control(args, timeout=20):
@@ -1946,6 +2058,27 @@ def wifi_scan():
 
     networks = parse_wifi_scan_output(result.stdout or "")
     return jsonify(networks)
+
+
+@app.route("/wifi/ap-block", methods=["GET"])
+def wifi_ap_block_get():
+    return jsonify({"blocked": get_ap_block_state()})
+
+
+@app.route("/wifi/ap-block", methods=["POST"])
+def wifi_ap_block_set():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+    blocked = payload.get("blocked")
+    if not isinstance(blocked, bool):
+        return jsonify({"error": "Pole blocked musi być typu boolean"}), 400
+    try:
+        set_ap_block_state(blocked)
+    except OSError:
+        return jsonify({"error": "Nie można zapisać blokady AP"}), 500
+    return jsonify({"ok": True, "blocked": blocked})
+
 
 @app.route("/wifi/scan-cached", methods=["GET"])
 def wifi_scan_cached():
