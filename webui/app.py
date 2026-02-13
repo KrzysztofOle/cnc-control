@@ -403,6 +403,25 @@ body.ui-busy #loading-overlay * {
   <button type="submit">Pobierz log</button>
 </form>
 
+<form action="/download-startup-log" method="get">
+  <input type="hidden" name="next" value="system">
+  <input type="hidden" name="boot" value="0">
+  <button type="submit">Pobierz log startowy (ten boot)</button>
+</form>
+
+<form action="/download-startup-log" method="get">
+  <input type="hidden" name="next" value="system">
+  <input type="hidden" name="boot" value="-1">
+  <button type="submit">Pobierz log startowy (poprzedni boot)</button>
+</form>
+
+<form action="/download-startup-log" method="get">
+  <input type="hidden" name="next" value="system">
+  <input type="hidden" name="boot" value="0">
+  <input type="hidden" name="scope" value="cnc">
+  <button type="submit">Pobierz log startowy usług CNC</button>
+</form>
+
 <hr>
 
 <h3>ZeroTier</h3>
@@ -2245,6 +2264,76 @@ def download_log():
         return send_file(tmp_file.name, as_attachment=True)
     except Exception:
         return redirect_to_next("Błąd pobierania logu")
+
+
+@app.route("/download-startup-log", methods=["GET"])
+def download_startup_log():
+    boot_index_raw = request.args.get("boot", "0").strip()
+    if boot_index_raw not in {"0", "-1"}:
+        return redirect_to_next("Nieprawidłowy parametr boot")
+
+    scope = request.args.get("scope", "all").strip().lower()
+    if scope not in {"all", "cnc"}:
+        return redirect_to_next("Nieprawidłowy parametr scope")
+
+    boot_index = int(boot_index_raw)
+    boot_suffix = "current" if boot_index == 0 else "previous"
+    scope_suffix = "cnc" if scope == "cnc" else "all"
+
+    try:
+        # PL: Pobieramy logi systemowe dla wybranego uruchomienia (boot).
+        # EN: Fetch system logs for the selected boot instance.
+        journalctl_args = [
+            "journalctl",
+            "-b",
+            str(boot_index),
+            "--no-pager",
+        ]
+        if scope == "cnc":
+            # PL: Ograniczamy log do uslug CNC widocznych w projekcie.
+            # EN: Limit logs to CNC services used in this project.
+            journalctl_args.extend(
+                [
+                    "-u",
+                    WEBUI_SYSTEMD_UNIT,
+                    "-u",
+                    "cnc-wifi-fallback.service",
+                    "-u",
+                    "cnc-ap.service",
+                ]
+            )
+        result = subprocess.run(
+            journalctl_args,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return redirect_to_next("Brak logu startowego")
+
+        tmp_file = tempfile.NamedTemporaryFile(
+            prefix=f"cnc-startup-{scope_suffix}-{boot_suffix}-",
+            suffix=".log",
+            delete=False,
+        )
+        with tmp_file:
+            tmp_file.write(result.stdout.encode("utf-8"))
+
+        @after_this_request
+        def cleanup_temp_file(response):
+            try:
+                os.remove(tmp_file.name)
+            except OSError:
+                pass
+            return response
+
+        return send_file(
+            tmp_file.name,
+            as_attachment=True,
+            download_name=f"cnc-startup-{scope_suffix}-{boot_suffix}.log",
+        )
+    except Exception:
+        return redirect_to_next("Błąd pobierania logu startowego")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
