@@ -124,6 +124,11 @@ Skrypty tworzą jednostki `cnc-webui.service` i `cnc-usb.service`, włączają a
 
 WebUI posiada prostą konfigurację Wi-Fi opartą o NetworkManager (`nmcli`).
 
+Funkcje:
+- szybkie przełączanie na zapisany profil bez ponownego wpisywania hasła,
+- automatyczne blokowanie pola hasła dla sieci z zapisanym profilem,
+- usuwanie zapisanego profilu z poziomu WebUI.
+
 Wymagania:
 - zainstalowany i uruchomiony NetworkManager (usługa `NetworkManager`)
 - reguły sudo dla `nmcli` (bez hasła) dla użytkownika uruchamiającego WebUI
@@ -133,8 +138,8 @@ Wymagania:
 Minimalny sudoers (plik `/etc/sudoers.d/cnc-wifi`):
 
 ```bash
-andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi list
-andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi connect *
+andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli *
+andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl stop cnc-ap.service
 ```
 
 Skrypt pomocniczy używany przez WebUI: `tools/wifi_control.sh`.

@@ -129,6 +129,11 @@ The scripts create `cnc-webui.service` and `cnc-usb.service`, enable autostart, 
 
 The WebUI provides a simple Wi-Fi configuration based on NetworkManager (`nmcli`).
 
+Features:
+- quick switching to a saved profile without re-entering the password,
+- automatic password field lock for networks with a saved profile,
+- saved profile removal directly from WebUI.
+
 Requirements:
 - NetworkManager installed and running (service `NetworkManager`)
 - sudo rules for `nmcli` (no password) for the user running WebUI
@@ -138,8 +143,8 @@ Requirements:
 Minimal sudoers (file `/etc/sudoers.d/cnc-wifi`):
 
 ```bash
-andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi list
-andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli dev wifi connect *
+andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli *
+andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl stop cnc-ap.service
 ```
 
 Helper script used by WebUI: `tools/wifi_control.sh`.

@@ -432,6 +432,7 @@ body.ui-busy #loading-overlay * {
     <label for="wifi-password">Hasło</label>
     <input type="password" id="wifi-password" autocomplete="new-password">
     <button type="button" id="wifi-connect" disabled>Połącz</button>
+    <button type="button" id="wifi-delete-profile" disabled>Usuń profil</button>
   </div>
   <div id="wifi-status" class="wifi-status wifi-status-muted">Status: bezczynny</div>
 </div>
@@ -722,7 +723,9 @@ body.ui-busy #loading-overlay * {
     const wifiCustomInput = document.getElementById("wifi-ssid-custom");
     const wifiPassword = document.getElementById("wifi-password");
     const wifiConnectButton = document.getElementById("wifi-connect");
+    const wifiDeleteProfileButton = document.getElementById("wifi-delete-profile");
     const wifiStatus = document.getElementById("wifi-status");
+    let savedWifiSsids = new Set();
 
     function setWifiStatus(text, level) {
       if (!wifiStatus) {
@@ -746,6 +749,60 @@ body.ui-busy #loading-overlay * {
       wifiCustomInput.style.display = visible ? "inline-block" : "none";
       if (!visible) {
         wifiCustomInput.value = "";
+      }
+    }
+
+    function getSelectedSsid() {
+      if (!wifiSelect) {
+        return "";
+      }
+      const selected = wifiSelect.value || "";
+      if (selected === "__custom__") {
+        return wifiCustomInput ? wifiCustomInput.value.trim() : "";
+      }
+      return selected;
+    }
+
+    function isSelectedSavedProfile() {
+      const ssid = getSelectedSsid();
+      return Boolean(ssid) && savedWifiSsids.has(ssid);
+    }
+
+    function updateWifiInputsState() {
+      if (!wifiPassword || !wifiSelect) {
+        return;
+      }
+      const isCustom = wifiSelect.value === "__custom__";
+      const hasSavedProfile = !isCustom && isSelectedSavedProfile();
+      wifiPassword.disabled = hasSavedProfile;
+      if (hasSavedProfile) {
+        wifiPassword.value = "";
+        wifiPassword.placeholder = "Hasło zapisane w profilu";
+      } else {
+        wifiPassword.placeholder = "";
+      }
+      if (wifiDeleteProfileButton) {
+        wifiDeleteProfileButton.disabled = busy || isCustom || !hasSavedProfile;
+      }
+    }
+
+    async function refreshSavedWifiProfiles() {
+      try {
+        const response = await fetch("/wifi/profiles", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error("Błąd odczytu profili Wi-Fi (HTTP " + response.status + ").");
+        }
+        const payload = await response.json();
+        const ssids = payload && Array.isArray(payload.ssids) ? payload.ssids : [];
+        savedWifiSsids = new Set(ssids.filter((entry) => typeof entry === "string" && entry));
+        updateWifiInputsState();
+      } catch (error) {
+        savedWifiSsids = new Set();
+        updateWifiInputsState();
       }
     }
 
@@ -800,6 +857,7 @@ body.ui-busy #loading-overlay * {
 
       wifiSelect.disabled = false;
       wifiConnectButton.disabled = false;
+      updateWifiInputsState();
       if (cachedAt) {
         setWifiStatus("Zapisane sieci (z " + cachedAt + ").", "muted");
       }
@@ -877,14 +935,14 @@ body.ui-busy #loading-overlay * {
       if (busy || !wifiSelect || !wifiPassword) {
         return;
       }
-      const selected = wifiSelect.value || "";
-      const ssid = selected === "__custom__" && wifiCustomInput ? wifiCustomInput.value.trim() : selected;
+      const ssid = getSelectedSsid();
       const password = wifiPassword.value || "";
+      const hasSavedProfile = isSelectedSavedProfile();
       if (!ssid) {
         setWifiStatus("Wybierz sieć Wi-Fi.", "error");
         return;
       }
-      if (!password) {
+      if (!password && !hasSavedProfile) {
         setWifiStatus("Podaj hasło Wi-Fi.", "error");
         return;
       }
@@ -906,6 +964,9 @@ body.ui-busy #loading-overlay * {
             const payload = await response.json();
             if (payload && payload.error) {
               message = payload.error;
+              if (payload.detail) {
+                message += ": " + payload.detail;
+              }
             }
           } catch (payloadError) {
             message = message + " (HTTP " + response.status + ").";
@@ -916,10 +977,61 @@ body.ui-busy #loading-overlay * {
         const message = (payload && payload.message) || "Połączono z siecią Wi-Fi.";
         setWifiStatus(message, "ok");
         wifiPassword.value = "";
+        await refreshSavedWifiProfiles();
       } catch (error) {
         setWifiStatus(error.message || "Błąd połączenia Wi-Fi.", "error");
       } finally {
         setBusy(false);
+        updateWifiInputsState();
+      }
+    }
+
+    async function deleteWifiProfile() {
+      if (busy || !wifiSelect) {
+        return;
+      }
+      const ssid = getSelectedSsid();
+      if (!ssid || !isSelectedSavedProfile()) {
+        setWifiStatus("Wybierz sieć z zapisanym profilem.", "error");
+        return;
+      }
+      if (!window.confirm("Usunąć zapisany profil dla sieci: " + ssid + "?")) {
+        return;
+      }
+
+      setBusy(true, "Usuwanie profilu Wi-Fi...");
+      setWifiStatus("Usuwanie profilu...", "muted");
+      try {
+        const response = await fetch("/wifi/profile", {
+          method: "DELETE",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ssid: ssid }),
+        });
+        if (!response.ok) {
+          let message = "Nie udało się usunąć profilu.";
+          try {
+            const payload = await response.json();
+            if (payload && payload.error) {
+              message = payload.error;
+            }
+          } catch (payloadError) {
+            message = message + " (HTTP " + response.status + ").";
+          }
+          throw new Error(message);
+        }
+        const payload = await response.json();
+        const message = (payload && payload.message) || "Profil usunięty.";
+        setWifiStatus(message, "ok");
+        wifiPassword.value = "";
+        await refreshSavedWifiProfiles();
+      } catch (error) {
+        setWifiStatus(error.message || "Błąd usuwania profilu.", "error");
+      } finally {
+        setBusy(false);
+        updateWifiInputsState();
       }
     }
 
@@ -927,6 +1039,7 @@ body.ui-busy #loading-overlay * {
       wifiSelect.addEventListener("change", () => {
         const isCustom = wifiSelect.value === "__custom__";
         setCustomVisible(isCustom);
+        updateWifiInputsState();
       });
     }
 
@@ -938,6 +1051,7 @@ body.ui-busy #loading-overlay * {
         if (wifiSelect.value !== "__custom__") {
           return;
         }
+        updateWifiInputsState();
       });
     }
 
@@ -945,6 +1059,10 @@ body.ui-busy #loading-overlay * {
     if (wifiConnectButton) {
       wifiConnectButton.addEventListener("click", connectWifi);
     }
+    if (wifiDeleteProfileButton) {
+      wifiDeleteProfileButton.addEventListener("click", deleteWifiProfile);
+    }
+    refreshSavedWifiProfiles();
     (async () => {
       try {
         const cachedResponse = await fetch("/wifi/scan-cached", {
@@ -966,6 +1084,7 @@ body.ui-busy #loading-overlay * {
         // PL: Brak cache to normalna sytuacja.
         // EN: Missing cache is a normal case.
       }
+      updateWifiInputsState();
     })();
   }
 
@@ -1235,6 +1354,42 @@ def parse_wifi_scan_output(output):
     result = list(networks.values())
     result.sort(key=lambda item: (not item["in_use"], -item["signal"], item["ssid"].casefold()))
     return result
+
+
+def parse_wifi_profiles_output(output):
+    profiles = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        fields = split_nmcli_fields(line)
+        if len(fields) < 3:
+            continue
+        name, connection_type, ssid = fields[:3]
+        if connection_type.strip() != "wifi":
+            continue
+        name = name.strip()
+        ssid = ssid.strip()
+        if not name or not ssid:
+            continue
+        profiles.append({"name": name, "ssid": ssid})
+    profiles.sort(key=lambda item: (item["ssid"].casefold(), item["name"].casefold()))
+    return profiles
+
+
+def load_wifi_profiles():
+    result = run_wifi_control(["profiles"], timeout=20)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return None, detail
+    return parse_wifi_profiles_output(result.stdout or ""), None
+
+
+def group_wifi_profiles_by_ssid(profiles):
+    grouped = {}
+    for profile in profiles:
+        ssid = profile["ssid"]
+        grouped.setdefault(ssid, []).append(profile["name"])
+    return grouped
 
 
 def read_cached_wifi_scan():
@@ -1790,24 +1945,138 @@ def wifi_connect():
     password = payload.get("password")
     if not isinstance(ssid, str) or not ssid.strip():
         return jsonify({"error": "Brak SSID"}), 400
-    if not isinstance(password, str) or not password:
-        return jsonify({"error": "Brak hasła"}), 400
+    if password is None:
+        password = ""
+    if not isinstance(password, str):
+        return jsonify({"error": "Nieprawidłowe hasło"}), 400
 
     if not os.path.isfile(WIFI_CONTROL_SCRIPT):
         return jsonify({"error": "Brak skryptu wifi_control.sh"}), 500
 
+    ssid = ssid.strip()
+    password = password.strip()
+    has_saved_profile = False
+    target_profile_name = None
+    if not password:
+        profiles, profiles_error = load_wifi_profiles()
+        if profiles is None:
+            message = "Nie można odczytać zapisanych profili Wi-Fi"
+            if profiles_error:
+                message = f"{message}: {profiles_error}"
+            return jsonify({"error": message}), 500
+        grouped_profiles = group_wifi_profiles_by_ssid(profiles)
+        profile_names = grouped_profiles.get(ssid, [])
+        if profile_names:
+            has_saved_profile = True
+            target_profile_name = profile_names[0]
+        else:
+            return jsonify({"error": "Dla nowej sieci podaj hasło Wi-Fi"}), 400
+
     try:
-        result = run_wifi_control(["connect", ssid, password], timeout=30)
+        if has_saved_profile and target_profile_name:
+            result = run_wifi_control(["connect-profile", target_profile_name], timeout=30)
+        else:
+            result = run_wifi_control(["connect", ssid, password], timeout=30)
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Timeout łączenia Wi-Fi"}), 500
     except OSError:
         return jsonify({"error": "Nie można uruchomić wifi_control.sh"}), 500
 
     if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        if detail:
+            app.logger.warning(
+                "Połączenie Wi-Fi nieudane (rc=%s): %s",
+                result.returncode,
+                detail,
+            )
+            return (
+                jsonify(
+                    {
+                        "error": "Nie udało się połączyć z siecią Wi-Fi",
+                        "detail": detail,
+                    }
+                ),
+                500,
+            )
+
         app.logger.warning("Połączenie Wi-Fi nieudane (rc=%s).", result.returncode)
         return jsonify({"error": "Nie udało się połączyć z siecią Wi-Fi"}), 500
 
     return jsonify({"ok": True, "message": f"Połączono z siecią: {ssid}."})
+
+
+@app.route("/wifi/profiles", methods=["GET"])
+def wifi_profiles():
+    if not os.path.isfile(WIFI_CONTROL_SCRIPT):
+        return jsonify({"error": "Brak skryptu wifi_control.sh"}), 500
+
+    try:
+        profiles, profiles_error = load_wifi_profiles()
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout odczytu profili Wi-Fi"}), 500
+    except OSError:
+        return jsonify({"error": "Nie można uruchomić wifi_control.sh"}), 500
+
+    if profiles is None:
+        message = "Nie można odczytać zapisanych profili Wi-Fi"
+        if profiles_error:
+            message = f"{message}: {profiles_error}"
+        return jsonify({"error": message}), 500
+
+    unique_ssids = sorted({profile["ssid"] for profile in profiles}, key=str.casefold)
+    return jsonify({"profiles": profiles, "ssids": unique_ssids})
+
+
+@app.route("/wifi/profile", methods=["DELETE"])
+def wifi_profile_delete():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+
+    ssid = payload.get("ssid")
+    if not isinstance(ssid, str) or not ssid.strip():
+        return jsonify({"error": "Brak SSID"}), 400
+
+    if not os.path.isfile(WIFI_CONTROL_SCRIPT):
+        return jsonify({"error": "Brak skryptu wifi_control.sh"}), 500
+
+    ssid = ssid.strip()
+    try:
+        profiles, profiles_error = load_wifi_profiles()
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout odczytu profili Wi-Fi"}), 500
+    except OSError:
+        return jsonify({"error": "Nie można uruchomić wifi_control.sh"}), 500
+
+    if profiles is None:
+        message = "Nie można odczytać zapisanych profili Wi-Fi"
+        if profiles_error:
+            message = f"{message}: {profiles_error}"
+        return jsonify({"error": message}), 500
+
+    grouped_profiles = group_wifi_profiles_by_ssid(profiles)
+    profile_names = grouped_profiles.get(ssid, [])
+    if not profile_names:
+        return jsonify({"error": f"Brak zapisanego profilu dla sieci: {ssid}"}), 404
+
+    deleted = []
+    for profile_name in profile_names:
+        try:
+            result = run_wifi_control(["delete-profile", profile_name], timeout=20)
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": f"Timeout usuwania profilu: {profile_name}"}), 500
+        except OSError:
+            return jsonify({"error": "Nie można uruchomić wifi_control.sh"}), 500
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            message = f"Nie udało się usunąć profilu: {profile_name}"
+            if detail:
+                message = f"{message}: {detail}"
+            return jsonify({"error": message}), 500
+        deleted.append(profile_name)
+
+    return jsonify({"ok": True, "message": f"Usunięto profil(e) dla sieci: {ssid}.", "deleted": deleted})
 
 @app.route("/upload", methods=["POST"])
 def upload():
