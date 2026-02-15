@@ -158,6 +158,7 @@ Features:
 - automatic password field lock for networks with a saved profile,
 - saved profile removal directly from WebUI,
 - `AP block` switch (effective only until next reboot),
+- global AP lock controlled by `CNC_AP_ENABLED` (system lock),
 - automatic fallback to the previous profile when a new connection attempt fails.
 
 Requirements:
@@ -174,6 +175,19 @@ andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl stop cnc-ap.service
 ```
 
 Helper script used by WebUI: `tools/wifi_control.sh`.
+
+### AP Mode Lock
+
+The `CNC_AP_ENABLED` variable defaults to `false`.
+
+With `CNC_AP_ENABLED=false`:
+- the UI shows badge `AP: DISABLED (SYSTEM LOCK)`,
+- AP controls remain visible but disabled (greyed out),
+- backend rejects AP state change via API with `403` and:
+  `AP mode disabled by system configuration`.
+
+AP logic stays in the codebase and can be re-enabled by setting
+`CNC_AP_ENABLED=true`.
 
 ---
 
@@ -196,7 +210,7 @@ Configuration is centrally managed via:
 /etc/cnc-control/cnc-control.env
 ```
 
-This file is loaded by systemd (`EnvironmentFile=`) and by the mode scripts (`net_mode.sh`, `usb_mode.sh`). Missing file or required variables cause explicit errors.
+This file is loaded by systemd (`EnvironmentFile=`), mode scripts (`net_mode.sh`, `usb_mode.sh`), and WebUI (`webui/app.py`). Missing file or required variables cause explicit errors.
 
 Quick start:
 
@@ -225,6 +239,7 @@ Optional variables:
 | `CNC_WEBUI_SYSTEMD_UNIT` | systemd unit name for webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Time range for `journalctl` (e.g. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
 | `CNC_AP_BLOCK_FLAG` | Path to temporary AP block flag file | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
+| `CNC_AP_ENABLED` | Global AP switch (`true`/`false`) | `false` | `webui/app.py` |
 | `CNC_USB_MOUNT` | Legacy: USB mount point | none | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
 
 ---

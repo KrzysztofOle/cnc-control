@@ -153,6 +153,7 @@ Funkcje:
 - automatyczne blokowanie pola hasła dla sieci z zapisanym profilem,
 - usuwanie zapisanego profilu z poziomu WebUI,
 - przełącznik `Blokada AP` (działa do najbliższego restartu systemu),
+- globalna blokada AP przez `CNC_AP_ENABLED` (system lock),
 - automatyczny powrót do poprzedniego profilu po nieudanej próbie połączenia.
 
 Wymagania:
@@ -169,6 +170,19 @@ andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl stop cnc-ap.service
 ```
 
 Skrypt pomocniczy używany przez WebUI: `tools/wifi_control.sh`.
+
+### Blokada trybu AP
+
+Zmienna `CNC_AP_ENABLED` domyslnie ma wartosc `false`.
+
+Przy `CNC_AP_ENABLED=false`:
+- UI pokazuje badge `AP: DISABLED (SYSTEM LOCK)`,
+- kontrolki AP pozostaja widoczne, ale sa nieaktywne (wyszarzone),
+- backend odrzuca zmiane stanu AP przez API kodem `403` z komunikatem:
+  `AP mode disabled by system configuration`.
+
+Logika AP pozostaje w kodzie i moze zostac odblokowana przez ustawienie
+`CNC_AP_ENABLED=true`.
 
 ---
 
@@ -191,7 +205,7 @@ Konfiguracja jest centralnie zarzadzana przez plik:
 /etc/cnc-control/cnc-control.env
 ```
 
-Plik ten jest wczytywany przez systemd (`EnvironmentFile=`) oraz przez skrypty trybow (`net_mode.sh`, `usb_mode.sh`). Brak pliku lub brak wymaganych zmiennych powoduje jawny blad.
+Plik ten jest wczytywany przez systemd (`EnvironmentFile=`), skrypty trybow (`net_mode.sh`, `usb_mode.sh`) oraz WebUI (`webui/app.py`). Brak pliku lub brak wymaganych zmiennych powoduje jawny blad.
 
 Szybki start:
 
@@ -220,6 +234,7 @@ Pozostale zmienne (opcjonalne):
 | `CNC_WEBUI_SYSTEMD_UNIT` | Nazwa unita systemd dla webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Zakres czasu dla `journalctl` (np. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
 | `CNC_AP_BLOCK_FLAG` | Sciezka pliku tymczasowej blokady AP | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
+| `CNC_AP_ENABLED` | Globalny przelacznik AP (`true`/`false`) | `false` | `webui/app.py` |
 | `CNC_USB_MOUNT` | Legacy: punkt montowania USB | brak | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
 
 ---

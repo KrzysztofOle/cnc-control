@@ -21,6 +21,42 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(BASE_DIR)
+
+
+def load_environment_file(env_path):
+    if not env_path or not os.path.isfile(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as env_file:
+            for line in env_file:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                key = key.strip()
+                if not key:
+                    continue
+                value = value.strip()
+                if (
+                    len(value) >= 2
+                    and value[0] == value[-1]
+                    and value[0] in {"'", '"'}
+                ):
+                    value = value[1:-1]
+                os.environ.setdefault(key, value)
+    except OSError as exc:
+        app.logger.warning("Nie mozna odczytac EnvironmentFile (%s): %s", env_path, exc)
+
+
+def parse_env_bool(value, default=False):
+    if value is None:
+        return default
+    return value.strip().casefold() == "true"
+
+
+ENV_FILE_PATH = os.environ.get("CNC_ENV_FILE", "/etc/cnc-control/cnc-control.env")
+load_environment_file(ENV_FILE_PATH)
+
 UPLOAD_DIR = os.environ.get("CNC_UPLOAD_DIR")
 if not UPLOAD_DIR:
     app.logger.error("Brak zmiennej CNC_UPLOAD_DIR. Upload i lista plikow beda niedostepne.")
@@ -48,6 +84,7 @@ AP_BLOCK_FLAG = os.environ.get(
     "CNC_AP_BLOCK_FLAG",
     "/dev/shm/cnc-ap-blocked.flag",
 )
+CNC_AP_ENABLED = parse_env_bool(os.environ.get("CNC_AP_ENABLED"), default=False)
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     "/home/andrzej/cnc-control",
@@ -299,6 +336,25 @@ button:disabled {
 .wifi-status-error { color: #b71c1c; }
 .wifi-status-muted { color: #555555; }
 
+.btn-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ap-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ap-badge-disabled {
+  color: #7a1111;
+  background: #fdecea;
+  border: 1px solid #f3b7b2;
+}
+
 body.ui-busy * {
   pointer-events: none;
 }
@@ -501,6 +557,12 @@ body.ui-busy #loading-overlay * {
 <h3>Wi-Fi</h3>
 <div id="wifi-panel">
   <div class="wifi-row">
+    <span class="wifi-status wifi-status-muted"><b>AP Enabled:</b> <span id="ap-enabled-status">{{ 'true' if ap_enabled else 'false' }}</span></span>
+    {% if not ap_enabled %}
+    <span class="ap-badge ap-badge-disabled" title="Tryb AP zablokowany w konfiguracji systemowej">AP: DISABLED (SYSTEM LOCK)</span>
+    {% endif %}
+  </div>
+  <div class="wifi-row">
     <button type="button" id="wifi-scan">Skanuj</button>
     <select id="wifi-ssid" disabled></select>
     <input type="text" id="wifi-ssid-custom" placeholder="Nazwa sieci (SSID)" autocomplete="off" style="display:none;">
@@ -513,17 +575,18 @@ body.ui-busy #loading-overlay * {
   </div>
   <div class="wifi-row">
     <label for="wifi-ap-block-toggle">Blokada AP</label>
-    <label class="toggle" aria-label="Blokada AP fallback">
-      <input type="checkbox" id="wifi-ap-block-toggle">
+    <label class="toggle {% if not ap_enabled %}btn-disabled{% endif %}" aria-label="Blokada AP fallback" {% if not ap_enabled %}title="Tryb AP zablokowany w konfiguracji systemowej"{% endif %}>
+      <input type="checkbox" id="wifi-ap-block-toggle" {% if not ap_enabled %}disabled{% endif %} {% if not ap_enabled %}title="Tryb AP zablokowany w konfiguracji systemowej"{% endif %}>
       <span class="toggle-slider"></span>
     </label>
-    <span id="wifi-ap-block-state" class="wifi-status wifi-status-muted">Status: nieznany</span>
+    <span id="wifi-ap-block-state" class="wifi-status wifi-status-muted">{% if ap_enabled %}Status: nieznany{% else %}Tryb AP zablokowany w konfiguracji systemowej{% endif %}</span>
   </div>
   <div id="wifi-status" class="wifi-status wifi-status-muted">Status: bezczynny</div>
 </div>
 {% endif %}
 
 <script>
+  const AP_ENABLED = {{ "true" if ap_enabled else "false" }};
   const overlay = document.getElementById("loading-overlay");
   const timeoutMessage = document.getElementById("loading-timeout");
   const messageLabel = document.getElementById("loading-message");
@@ -1231,8 +1294,13 @@ body.ui-busy #loading-overlay * {
       wifiDeleteProfileButton.addEventListener("click", deleteWifiProfile);
     }
     if (wifiApBlockToggle) {
-      wifiApBlockToggle.addEventListener("change", toggleApBlock);
-      refreshApBlockState();
+      if (!AP_ENABLED) {
+        wifiApBlockToggle.disabled = true;
+        setApBlockStatus("Tryb AP zablokowany w konfiguracji systemowej", "muted");
+      } else {
+        wifiApBlockToggle.addEventListener("change", toggleApBlock);
+        refreshApBlockState();
+      }
     }
     refreshSavedWifiProfiles();
     (async () => {
@@ -1446,6 +1514,12 @@ def log_webui_event(message):
             log_file.write(log_line)
     except OSError:
         app.logger.warning("Nie mozna zapisac do CNC_WEBUI_LOG: %s", WEBUI_LOG_PATH)
+
+
+def ap_disabled_response(endpoint_name):
+    message = "AP mode disabled by system configuration"
+    log_webui_event(f"AP blocked by system config ({endpoint_name})")
+    return jsonify({"error": message}), 403
 
 
 def parse_status_mode(output):
@@ -1907,6 +1981,7 @@ def index():
         message=message,
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
+        ap_enabled=CNC_AP_ENABLED,
     )
 
 @app.route("/system")
@@ -1921,6 +1996,7 @@ def system():
         message=message,
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
+        ap_enabled=CNC_AP_ENABLED,
     )
 
 @app.route("/net", methods=["POST"])
@@ -1967,6 +2043,7 @@ def api_status():
             "mount_point": mount_point,
             "img_mounted": img_mounted,
             "switching": switching,
+            "ap_enabled": CNC_AP_ENABLED,
         }
     )
 
@@ -2121,6 +2198,8 @@ def wifi_ap_block_get():
 
 @app.route("/wifi/ap-block", methods=["POST"])
 def wifi_ap_block_set():
+    if not CNC_AP_ENABLED:
+        return ap_disabled_response("POST /wifi/ap-block")
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
