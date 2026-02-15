@@ -33,6 +33,12 @@ fi
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
 
+if command -v python >/dev/null 2>&1; then
+    python -m led_status_cli USB >/dev/null 2>&1 || true
+elif command -v python3 >/dev/null 2>&1; then
+    python3 -m led_status_cli USB >/dev/null 2>&1 || true
+fi
+
 echo "[USB MODE] Przełączanie na tryb CNC (USB)..."
 
 # Odmontuj obraz jeśli jest zamontowany
@@ -57,5 +63,11 @@ fi
 # Podłącz gadget w trybie RO
 echo "Podłączanie USB Mass Storage (RO)..."
 sudo modprobe g_mass_storage file="${IMG}" removable=1 ro=1
+
+if command -v python >/dev/null 2>&1; then
+    python -m led_status_cli USB >/dev/null 2>&1 || true
+elif command -v python3 >/dev/null 2>&1; then
+    python3 -m led_status_cli USB >/dev/null 2>&1 || true
+fi
 
 echo "[USB MODE] Gotowe. RichAuto może korzystać z USB."

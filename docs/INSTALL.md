@@ -123,6 +123,38 @@ gotowosc do pracy, a nie pelna usluga przegladania sieci.
 
 Tryb jest przełączany przez skrypty `usb_mode.sh` i `net_mode.sh`.
 
+## LED Status Indicator
+
+Wskaźnik LED działa jako osobna usługa `cnc-led.service` i wykorzystuje:
+
+- 3 diody WS2812/NeoPixel na `GPIO18`,
+- demon `led_status.py`,
+- CLI `led_status_cli.py`,
+- IPC przez plik `/tmp/cnc_led_mode`.
+
+Instalacja usługi:
+
+```bash
+chmod +x tools/setup_led_service.sh
+sudo tools/setup_led_service.sh /home/andrzej/cnc-control
+```
+
+Mapowanie trybów:
+
+| Tryb | Kolor | Zachowanie |
+|---|---|---|
+| `BOOT` | żółty `(255, 180, 0)` | stały |
+| `USB` | czerwony `(255, 0, 0)` | stały |
+| `UPLOAD` | zielony `(0, 255, 0)` | stały |
+| `AP` | niebieski `(0, 0, 255)` | mruganie `1 Hz` |
+| `ERROR` | czerwony `(255, 0, 0)` | szybkie mruganie `3 Hz` |
+| `IDLE` | biały przygaszony `(76, 76, 76)` | stały |
+
+Bezpieczeństwo:
+- jasność ograniczona do `0.3`,
+- diody gasną przy zatrzymaniu usługi (np. `SIGTERM`),
+- na systemach bez GPIO demon przechodzi w tryb fallback (brak crasha).
+
 ## Optymalizacja czasu uruchamiania
 
 Poniższe decyzje skracają boot i ograniczają niepotrzebne zależności:

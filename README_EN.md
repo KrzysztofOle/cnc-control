@@ -119,9 +119,33 @@ sudo tools/setup_webui.sh ~/cnc-control
 
 chmod +x tools/setup_usb_service.sh
 sudo tools/setup_usb_service.sh ~/cnc-control
+
+chmod +x tools/setup_led_service.sh
+sudo tools/setup_led_service.sh ~/cnc-control
 ```
 
-The scripts create `cnc-webui.service` and `cnc-usb.service`, enable autostart, and restart the services.
+The scripts create `cnc-webui.service`, `cnc-usb.service`, and `cnc-led.service`, enable autostart, and restart the services.
+
+---
+
+## LED Status Indicator
+
+- Hardware: 3x WS2812/NeoPixel on `GPIO18`
+- Brightness: `BRIGHTNESS=0.3` (power draw limit)
+- Logic: all 3 LEDs always use the same color and blink in full sync
+- IPC: `/tmp/cnc_led_mode` (written by `led_status_cli.py`, monitored by `led_status.py`)
+- Service: `cnc-led.service`
+
+Mode mapping:
+
+| Mode | Color | Behavior |
+|---|---|---|
+| `BOOT` | yellow `(255, 180, 0)` | steady |
+| `USB` | red `(255, 0, 0)` | steady |
+| `UPLOAD` | green `(0, 255, 0)` | steady |
+| `AP` | blue `(0, 0, 255)` | blinking `1 Hz` |
+| `ERROR` | red `(255, 0, 0)` | fast blink `3 Hz` |
+| `IDLE` | dim white `(76, 76, 76)` | steady |
 
 ---
 
@@ -213,11 +237,14 @@ cnc-control/
 ├── README.md
 ├── README_EN.md
 ├── config/
+├── led_status.py
+├── led_status_cli.py
 ├── net_mode.sh
 ├── status.sh
 ├── usb_mode.sh
 ├── tools/
 │   ├── setup_commands.sh
+│   ├── setup_led_service.sh
 │   ├── setup_usb_service.sh
 │   ├── setup_webui.sh
 │   ├── setup_nmtui.sh
@@ -235,11 +262,14 @@ cnc-control/
 | `README_EN.md` | Supporting documentation in English. |
 | `config/` | Example configuration files. |
 | `config/cnc-control.env.example` | Example central configuration (EnvironmentFile). |
+| `led_status.py` | WS2812 LED daemon (GPIO18) monitoring IPC and driving LED state. |
+| `led_status_cli.py` | CLI for LED mode IPC writes (`/tmp/cnc_led_mode`). |
 | `net_mode.sh` | Switches network mode (host/gadget). |
 | `status.sh` | Quick status view of the system/connections. |
 | `usb_mode.sh` | Switches USB mode for Raspberry Pi. |
 | `tools/` | Helper scripts for environment setup. |
 | `tools/setup_commands.sh` | Installs shortcut commands `usb_mode`, `net_mode`, `status`. |
+| `tools/setup_led_service.sh` | Configures `cnc-led.service` for `led_status.py`. |
 | `tools/setup_usb_service.sh` | Configures `cnc-usb.service` for `usb_mode.sh`. |
 | `tools/setup_webui.sh` | Configures `cnc-webui.service` for webui. |
 | `tools/setup_nmtui.sh` | Installs and launches `nmtui`. |

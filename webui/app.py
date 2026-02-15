@@ -14,6 +14,7 @@ import tempfile
 import json
 import re
 import shutil
+import sys
 from datetime import datetime
 from werkzeug.utils import secure_filename
 
@@ -74,6 +75,59 @@ HIDDEN_NAMES = {
     ".fseventsd",
     ".Trashes",
 }
+_LED_IDLE_SET = False
+
+
+def _set_led_mode(mode_name):
+    candidates = []
+    if sys.executable:
+        candidates.append([sys.executable, "-m", "led_status_cli", mode_name])
+    candidates.extend(
+        [
+            ["python", "-m", "led_status_cli", mode_name],
+            ["python3", "-m", "led_status_cli", mode_name],
+        ]
+    )
+
+    seen = set()
+    for command in candidates:
+        key = tuple(command)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            return
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            app.logger.warning("Nie mozna ustawic trybu LED (%s): %s", mode_name, exc)
+            return
+
+    app.logger.warning("Nie znaleziono interpretera Python do LED CLI.")
+
+
+if hasattr(app, "before_serving"):
+    @app.before_serving
+    def set_led_idle_before_serving():
+        _set_led_mode("IDLE")
+else:
+    @app.before_request
+    def set_led_idle_before_first_request():
+        global _LED_IDLE_SET
+        if _LED_IDLE_SET:
+            return
+        _set_led_mode("IDLE")
+        _LED_IDLE_SET = True
+
+
+_set_led_mode("BOOT")
 
 HTML = """
 <!doctype html>

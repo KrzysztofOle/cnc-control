@@ -122,6 +122,38 @@ more important than full network browsing features.
 
 Modes are switched by the `usb_mode.sh` and `net_mode.sh` scripts.
 
+## LED Status Indicator
+
+The LED indicator runs as a dedicated `cnc-led.service` and uses:
+
+- 3 WS2812/NeoPixel LEDs on `GPIO18`,
+- `led_status.py` daemon,
+- `led_status_cli.py` CLI,
+- IPC via `/tmp/cnc_led_mode`.
+
+Service installation:
+
+```bash
+chmod +x tools/setup_led_service.sh
+sudo tools/setup_led_service.sh /home/andrzej/cnc-control
+```
+
+Mode mapping:
+
+| Mode | Color | Behavior |
+|---|---|---|
+| `BOOT` | yellow `(255, 180, 0)` | steady |
+| `USB` | red `(255, 0, 0)` | steady |
+| `UPLOAD` | green `(0, 255, 0)` | steady |
+| `AP` | blue `(0, 0, 255)` | blinking `1 Hz` |
+| `ERROR` | red `(255, 0, 0)` | fast blink `3 Hz` |
+| `IDLE` | dim white `(76, 76, 76)` | steady |
+
+Safety:
+- brightness limited to `0.3`,
+- LEDs are turned off on service stop (e.g. `SIGTERM`),
+- on systems without GPIO the daemon switches to fallback mode (no crash).
+
 ## Boot time optimization
 
 The following choices shorten boot time and reduce unnecessary dependencies:

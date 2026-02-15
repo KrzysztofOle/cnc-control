@@ -114,9 +114,33 @@ sudo tools/setup_webui.sh ~/cnc-control
 
 chmod +x tools/setup_usb_service.sh
 sudo tools/setup_usb_service.sh ~/cnc-control
+
+chmod +x tools/setup_led_service.sh
+sudo tools/setup_led_service.sh ~/cnc-control
 ```
 
-Skrypty tworzą jednostki `cnc-webui.service` i `cnc-usb.service`, włączają autostart i restartują usługi.
+Skrypty tworzą jednostki `cnc-webui.service`, `cnc-usb.service` i `cnc-led.service`, włączają autostart i restartują usługi.
+
+---
+
+## LED Status Indicator
+
+- Sprzęt: 3x WS2812/NeoPixel na `GPIO18`
+- Jasność: `BRIGHTNESS=0.3` (ograniczenie poboru prądu)
+- Logika: wszystkie 3 diody mają ten sam kolor i zachowują pełną synchronizację
+- IPC: plik `/tmp/cnc_led_mode` (zapisywany przez `led_status_cli.py`, monitorowany przez `led_status.py`)
+- Usługa: `cnc-led.service`
+
+Mapowanie trybów:
+
+| Tryb | Kolor | Zachowanie |
+|---|---|---|
+| `BOOT` | żółty `(255, 180, 0)` | stały |
+| `USB` | czerwony `(255, 0, 0)` | stały |
+| `UPLOAD` | zielony `(0, 255, 0)` | stały |
+| `AP` | niebieski `(0, 0, 255)` | mruganie `1 Hz` |
+| `ERROR` | czerwony `(255, 0, 0)` | szybkie mruganie `3 Hz` |
+| `IDLE` | biały przygaszony `(76, 76, 76)` | stały |
 
 ---
 
@@ -208,11 +232,14 @@ cnc-control/
 ├── README.md
 ├── README_EN.md
 ├── config/
+├── led_status.py
+├── led_status_cli.py
 ├── net_mode.sh
 ├── status.sh
 ├── usb_mode.sh
 ├── tools/
 │   ├── setup_commands.sh
+│   ├── setup_led_service.sh
 │   ├── setup_usb_service.sh
 │   ├── setup_webui.sh
 │   ├── setup_nmtui.sh
@@ -230,11 +257,14 @@ cnc-control/
 | `README_EN.md` | Dokumentacja pomocnicza w języku angielskim. |
 | `config/` | Przykladowe pliki konfiguracyjne. |
 | `config/cnc-control.env.example` | Przykklad centralnej konfiguracji (EnvironmentFile). |
+| `led_status.py` | Demon LED WS2812 (GPIO18) monitorujacy IPC i sterujacy stanem LED. |
+| `led_status_cli.py` | CLI do zapisu trybu LED przez IPC (`/tmp/cnc_led_mode`). |
 | `net_mode.sh` | Przełączanie trybu sieciowego (host/gadget). |
 | `status.sh` | Szybki podgląd stanu systemu/połączeń. |
 | `usb_mode.sh` | Przełączanie trybu USB dla Raspberry Pi. |
 | `tools/` | Skrypty pomocnicze do konfiguracji środowiska. |
 | `tools/setup_commands.sh` | Instalacja komend skrótowych `usb_mode`, `net_mode`, `status`. |
+| `tools/setup_led_service.sh` | Konfiguracja usługi `cnc-led.service` dla `led_status.py`. |
 | `tools/setup_usb_service.sh` | Konfiguracja usługi `cnc-usb.service` dla `usb_mode.sh`. |
 | `tools/setup_webui.sh` | Konfiguracja usługi `cnc-webui.service` dla webui. |
 | `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |

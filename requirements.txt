@@ -1,0 +1,3 @@
+Flask>=2.2,<4
+Werkzeug>=2.2,<4
+rpi-ws281x>=5.0.0

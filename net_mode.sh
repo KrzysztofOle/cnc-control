@@ -33,6 +33,12 @@ fi
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
 
+if command -v python >/dev/null 2>&1; then
+    python -m led_status_cli UPLOAD >/dev/null 2>&1 || true
+elif command -v python3 >/dev/null 2>&1; then
+    python3 -m led_status_cli UPLOAD >/dev/null 2>&1 || true
+fi
+
 echo "[NET MODE] Przełączanie na tryb sieciowy (upload)..."
 
 # Odłącz USB gadget
@@ -45,6 +51,12 @@ fi
 if ! mountpoint -q "${MOUNT}"; then
     echo "Montowanie obrazu FAT..."
     sudo mount -o loop,rw,uid=1000,gid=1000,fmask=0022,dmask=0022 "${IMG}" "${MOUNT}"
+fi
+
+if command -v python >/dev/null 2>&1; then
+    python -m led_status_cli UPLOAD >/dev/null 2>&1 || true
+elif command -v python3 >/dev/null 2>&1; then
+    python3 -m led_status_cli UPLOAD >/dev/null 2>&1 || true
 fi
 
 echo "[NET MODE] Gotowe. Możesz kopiować pliki przez sieć."
