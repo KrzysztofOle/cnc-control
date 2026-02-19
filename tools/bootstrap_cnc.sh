@@ -28,9 +28,15 @@ run_as_root() {
     fi
 }
 
-resolve_install_user() {
-    if [ -n "${CNC_INSTALL_USER:-}" ]; then
-        printf '%s\n' "${CNC_INSTALL_USER}"
+resolve_default_user() {
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        printf '%s\n' "${SUDO_USER}"
+        return
+    fi
+
+    current_user="$(id -un)"
+    if [ "${current_user}" != "root" ]; then
+        printf '%s\n' "${current_user}"
         return
     fi
 
@@ -39,12 +45,24 @@ resolve_install_user() {
         return
     fi
 
-    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
-        printf '%s\n' "${SUDO_USER}"
+    regular_user="$(getent passwd | awk -F: '$3 >= 1000 && $1 != "nobody" {print $1; exit}')"
+    if [ -n "${regular_user}" ]; then
+        printf '%s\n' "${regular_user}"
         return
     fi
 
-    id -un
+    echo "Nie znaleziono automatycznie docelowego uzytkownika."
+    echo "Ustaw recznie: CNC_INSTALL_USER=<user> ./tools/bootstrap_cnc.sh"
+    exit 1
+}
+
+resolve_install_user() {
+    if [ -n "${CNC_INSTALL_USER:-}" ]; then
+        printf '%s\n' "${CNC_INSTALL_USER}"
+        return
+    fi
+
+    resolve_default_user
 }
 
 run_as_install_user() {

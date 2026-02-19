@@ -69,6 +69,43 @@ pip install -r requirements.txt
 
 System setup after a fresh `git clone` is described in `docs/INSTALL_EN.md`.
 
+### Quick SSH bootstrap (recommended)
+
+Target installation flow:
+
+1. Download only `bootstrap_cnc.sh` from the repository.
+2. Connect to Raspberry Pi over SSH and upload the script.
+3. Run the script and let it perform the full setup.
+
+On your local machine:
+
+```bash
+curl -fsSL -o bootstrap_cnc.sh \
+  https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+scp bootstrap_cnc.sh pi@<RPI_IP>:/home/pi/bootstrap_cnc.sh
+```
+
+On Raspberry Pi:
+
+```bash
+ssh pi@<RPI_IP>
+chmod +x ~/bootstrap_cnc.sh
+~/bootstrap_cnc.sh
+```
+
+The script automatically:
+- updates the system (`apt update/upgrade`),
+- installs dependencies,
+- clones/updates the `cnc-control` repository over HTTPS,
+- runs `setup_system.sh`, `setup_commands.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+
+Optional user and repo directory override:
+
+```bash
+CNC_INSTALL_USER=pi CNC_REPO_DIR=/home/pi/cnc-control ~/bootstrap_cnc.sh
+```
+
 ---
 
 ## ▶️ Running the Project
@@ -105,7 +142,7 @@ chmod +x tools/setup_commands.sh
 ./tools/setup_commands.sh
 ```
 
-The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc`).
+The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc` and `~/.zshrc`).
 
 ---
 

@@ -66,6 +66,43 @@ pip install -r requirements.txt
 
 Instrukcja przygotowania systemu po samym `git clone` znajduje się w `docs/INSTALL.md`.
 
+### Szybki bootstrap przez SSH (zalecane)
+
+Docelowy przebieg instalacji:
+
+1. Pobierasz tylko `bootstrap_cnc.sh` z repozytorium.
+2. Łączysz się z Raspberry Pi przez SSH i kopiujesz skrypt.
+3. Uruchamiasz skrypt, a on wykonuje pełne przygotowanie systemu.
+
+Na komputerze lokalnym:
+
+```bash
+curl -fsSL -o bootstrap_cnc.sh \
+  https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+scp bootstrap_cnc.sh pi@<IP_RPI>:/home/pi/bootstrap_cnc.sh
+```
+
+Na Raspberry Pi:
+
+```bash
+ssh pi@<IP_RPI>
+chmod +x ~/bootstrap_cnc.sh
+~/bootstrap_cnc.sh
+```
+
+Skrypt automatycznie:
+- zaktualizuje system (`apt update/upgrade`),
+- zainstaluje zależności,
+- pobierze/odświeży repo `cnc-control` po HTTPS,
+- uruchomi `setup_system.sh`, `setup_commands.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+
+Opcjonalne nadpisanie użytkownika i katalogu repo:
+
+```bash
+CNC_INSTALL_USER=pi CNC_REPO_DIR=/home/pi/cnc-control ~/bootstrap_cnc.sh
+```
+
 ---
 
 ## ▶️ Uruchamianie
@@ -100,7 +137,7 @@ chmod +x tools/setup_commands.sh
 ./tools/setup_commands.sh
 ```
 
-Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh` i w razie potrzeby dodaje `~/.local/bin` do `PATH` (w `~/.bashrc`).
+Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh` i w razie potrzeby dodaje `~/.local/bin` do `PATH` (w `~/.bashrc` i `~/.zshrc`).
 
 ---
 
