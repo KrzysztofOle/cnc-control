@@ -55,9 +55,10 @@ Opcjonalnie:
 ```bash
 git clone https://github.com/<twoj-user>/cnc-control.git
 cd cnc-control
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install --editable ".[rpi]"
 ```
 
 ---
@@ -66,41 +67,36 @@ pip install -r requirements.txt
 
 Instrukcja przygotowania systemu po samym `git clone` znajduje się w `docs/INSTALL.md`.
 
-### Szybki bootstrap przez SSH (zalecane)
+### Szybki bootstrap na Raspberry Pi (zalecane)
 
-Docelowy przebieg instalacji:
-
-1. Pobierasz tylko `bootstrap_cnc.sh` z repozytorium.
-2. Łączysz się z Raspberry Pi przez SSH i kopiujesz skrypt.
-3. Uruchamiasz skrypt, a on wykonuje pełne przygotowanie systemu.
-
-Na komputerze lokalnym:
+Najprostsza metoda: zaloguj się na Raspberry Pi (lokalnie lub przez SSH) i wykonaj:
 
 ```bash
-curl -fsSL -o bootstrap_cnc.sh \
-  https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+cd ~
+wget https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
 chmod +x bootstrap_cnc.sh
-scp bootstrap_cnc.sh <USER_RPI>@<IP_RPI>:~/bootstrap_cnc.sh
+./bootstrap_cnc.sh
 ```
 
-Na Raspberry Pi:
+Opcjonalnie możesz jawnie wskazać użytkownika instalacji:
 
 ```bash
-ssh <USER_RPI>@<IP_RPI>
-chmod +x ~/bootstrap_cnc.sh
-~/bootstrap_cnc.sh
+CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 ```
 
 Skrypt automatycznie:
 - zaktualizuje system (`apt update/upgrade`),
-- zainstaluje zależności,
+- utworzy `.venv` i zainstaluje zależności z `pyproject.toml` (z próbą dodatku `rpi-ws281x`),
 - pobierze/odświeży repo `cnc-control` po HTTPS,
 - uruchomi `setup_system.sh`, `setup_commands.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
 
 Opcjonalne nadpisanie użytkownika i katalogu repo:
 
 ```bash
-CNC_INSTALL_USER=<USER_RPI> CNC_REPO_DIR=/home/<USER_RPI>/cnc-control ~/bootstrap_cnc.sh
+CNC_INSTALL_USER=<USER_RPI> \
+CNC_REPO_DIR=/home/<USER_RPI>/cnc-control \
+CNC_VENV_DIR=/home/<USER_RPI>/cnc-control/.venv \
+~/bootstrap_cnc.sh
 ```
 
 ---
@@ -283,6 +279,7 @@ cnc-control/
 ├── AGENTS.md
 ├── README.md
 ├── README_EN.md
+├── pyproject.toml
 ├── config/
 ├── led_status.py
 ├── led_status_cli.py
@@ -307,6 +304,7 @@ cnc-control/
 | `AGENTS.md` | Zasady współpracy i dokumentacji w projekcie. |
 | `README.md` | Dokumentacja bazowa w języku polskim. |
 | `README_EN.md` | Dokumentacja pomocnicza w języku angielskim. |
+| `pyproject.toml` | Konfiguracja pakietu Python i zależności (`pip install .`, `.[rpi]`). |
 | `config/` | Przykladowe pliki konfiguracyjne. |
 | `config/cnc-control.env.example` | Przykklad centralnej konfiguracji (EnvironmentFile). |
 | `led_status.py` | Demon LED WS2812 (GPIO18) monitorujacy IPC i sterujacy stanem LED. |

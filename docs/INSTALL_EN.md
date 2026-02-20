@@ -8,13 +8,42 @@
 - Root access (sudo)
 - Repository located at `/home/andrzej/cnc-control` (required by the systemd unit)
 
+## Quick bootstrap on Raspberry Pi (recommended)
+
+Simplest installation path without manual repository clone:
+
+```bash
+cd ~
+wget https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+./bootstrap_cnc.sh
+```
+
+Optionally, you can set the installation user explicitly:
+
+```bash
+CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
+```
+
+The script prepares the system, clones/updates the repository, creates `.venv`,
+installs dependencies, and configures systemd services.
+
 ## Step-by-step installation
 
 ```bash
 git clone https://github.com/<your-user>/cnc-control.git /home/andrzej/cnc-control
 cd /home/andrzej/cnc-control
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install --upgrade ".[rpi]" || pip install --upgrade .
 sudo ./tools/setup_system.sh
 ```
+
+Application dependencies are managed via `pyproject.toml`.
+`cnc-webui.service` and `cnc-led.service` prefer the interpreter at
+`/home/andrzej/cnc-control/.venv/bin/python3` (with fallback to system `python3`
+via `setup_webui.sh` and `setup_led_service.sh` when the venv is missing).
 
 ## Configuration
 

@@ -8,9 +8,8 @@ APT_PACKAGES=(
     python3
     python3-venv
     python3-pip
-    python3-flask
-    python3-werkzeug
-    python3-rpi-ws281x
+    build-essential
+    python3-dev
     network-manager
     openssh-server
     curl
@@ -110,19 +109,20 @@ fi
 
 REPO_URL="${CNC_REPO_URL:-${REPO_URL_DEFAULT}}"
 REPO_DIR="${CNC_REPO_DIR:-${INSTALL_HOME}/cnc-control}"
+VENV_DIR="${CNC_VENV_DIR:-${REPO_DIR}/.venv}"
 
-echo "[1/7] Aktualizacja systemu"
+echo "[1/8] Aktualizacja systemu"
 run_as_root apt-get update
 run_as_root env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 
-echo "[2/7] Instalacja pakietow"
+echo "[2/8] Instalacja pakietow"
 run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
 
-echo "[3/7] Uruchamianie uslug bazowych"
+echo "[3/8] Uruchamianie uslug bazowych"
 run_as_root systemctl enable --now ssh
 run_as_root systemctl enable --now NetworkManager
 
-echo "[4/7] Klonowanie lub aktualizacja repozytorium (${REPO_URL})"
+echo "[4/8] Klonowanie lub aktualizacja repozytorium (${REPO_URL})"
 run_as_install_user mkdir -p "$(dirname "${REPO_DIR}")"
 if [ -d "${REPO_DIR}/.git" ]; then
     run_as_install_user git -C "${REPO_DIR}" remote set-url origin "${REPO_URL}"
@@ -135,18 +135,40 @@ else
     run_as_install_user git clone "${REPO_URL}" "${REPO_DIR}"
 fi
 
-echo "[5/7] Instalacja konfiguracji systemowej cnc-control"
+PYTHON3_BIN="$(command -v python3 || true)"
+if [ -z "${PYTHON3_BIN}" ]; then
+    echo "Brak python3 w PATH."
+    exit 1
+fi
+
+echo "[5/8] Konfiguracja srodowiska Python (venv + pyproject)"
+run_as_install_user "${PYTHON3_BIN}" -m venv "${VENV_DIR}"
+VENV_PIP="${VENV_DIR}/bin/pip"
+if [ ! -x "${VENV_PIP}" ]; then
+    echo "Brak pip w srodowisku venv: ${VENV_PIP}"
+    exit 1
+fi
+run_as_install_user "${VENV_PIP}" install --upgrade pip
+if run_as_install_user "${VENV_PIP}" install --upgrade "${REPO_DIR}[rpi]"; then
+    echo "[INFO] Zainstalowano zaleznosci bazowe i LED z pyproject.toml."
+else
+    echo "[WARN] Instalacja dodatku LED nieudana. Instalacja samych zaleznosci bazowych."
+    run_as_install_user "${VENV_PIP}" install --upgrade "${REPO_DIR}"
+fi
+
+echo "[6/8] Instalacja konfiguracji systemowej cnc-control"
 run_as_root bash "${REPO_DIR}/tools/setup_system.sh"
 
-echo "[6/7] Instalacja skrotow CLI"
+echo "[7/8] Instalacja skrotow CLI"
 run_as_root bash "${REPO_DIR}/tools/setup_commands.sh"
 
-echo "[7/7] Instalacja uslug systemd (WebUI + USB + LED)"
-run_as_root env SUDO_USER="${INSTALL_USER}" bash "${REPO_DIR}/tools/setup_webui.sh" "${REPO_DIR}"
+echo "[8/8] Instalacja uslug systemd (WebUI + USB + LED)"
+run_as_root env SUDO_USER="${INSTALL_USER}" CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_webui.sh" "${REPO_DIR}"
 run_as_root bash "${REPO_DIR}/tools/setup_usb_service.sh" "${REPO_DIR}"
-run_as_root bash "${REPO_DIR}/tools/setup_led_service.sh" "${REPO_DIR}"
+run_as_root env CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_led_service.sh" "${REPO_DIR}"
 
 echo "=== CNC Bootstrap Done ==="
 echo "Repozytorium: ${REPO_DIR}"
+echo "Srodowisko Python: ${VENV_DIR}"
 echo "Uzytkownik uslug: ${INSTALL_USER}"
 echo "Sprawdz: systemctl status cnc-webui cnc-usb cnc-led"
