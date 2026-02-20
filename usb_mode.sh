@@ -1,7 +1,14 @@
 #!/bin/bash
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then
+    RESOLVED_PATH="$(readlink -f "${SCRIPT_PATH}" 2>/dev/null || true)"
+    if [ -n "${RESOLVED_PATH}" ]; then
+        SCRIPT_PATH="${RESOLVED_PATH}"
+    fi
+fi
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_ROOT="${SCRIPT_DIR}"
 VENV_DIR="${CNC_VENV_DIR:-${REPO_ROOT}/.venv}"
 VENV_PYTHON="${VENV_DIR}/bin/python3"
