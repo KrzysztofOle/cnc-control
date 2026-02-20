@@ -53,6 +53,7 @@ WorkingDirectory=${WEBUI_DIR}
 ExecStart=${PYTHON_BIN} -u ${WEBUI_APP}
 Restart=on-failure
 RestartSec=3
+LogsDirectory=cnc-control
 
 [Install]
 WantedBy=multi-user.target

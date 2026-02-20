@@ -8,6 +8,7 @@ Type=simple
 User=andrzej
 WorkingDirectory=/home/andrzej/cnc-control/webui
 ExecStart=/home/andrzej/cnc-control/.venv/bin/python3 -u /home/andrzej/cnc-control/webui/app.py
+LogsDirectory=cnc-control
 
 [Install]
 WantedBy=multi-user.target

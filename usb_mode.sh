@@ -45,6 +45,37 @@ fi
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
 
+ensure_usb_image() {
+    local size_mb="${CNC_USB_IMG_SIZE_MB:-1024}"
+
+    if [ -e "${IMG}" ] && [ ! -f "${IMG}" ]; then
+        echo "Sciezka CNC_USB_IMG nie wskazuje na zwykly plik: ${IMG}"
+        return 1
+    fi
+
+    if [ -f "${IMG}" ] && [ -s "${IMG}" ]; then
+        return 0
+    fi
+
+    if ! [[ "${size_mb}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Nieprawidlowa wartosc CNC_USB_IMG_SIZE_MB: ${size_mb}"
+        return 1
+    fi
+
+    if ! command -v mkfs.vfat >/dev/null 2>&1; then
+        echo "Brak mkfs.vfat. Zainstaluj pakiet dosfstools."
+        return 1
+    fi
+
+    local image_dir
+    image_dir="$(dirname "${IMG}")"
+    echo "Tworzenie obrazu USB (${size_mb}MB): ${IMG}"
+    sudo mkdir -p "${image_dir}"
+    sudo truncate -s "${size_mb}M" "${IMG}"
+    sudo mkfs.vfat -F 32 "${IMG}" >/dev/null
+    sudo chmod 664 "${IMG}"
+}
+
 set_led_mode() {
     local mode="${1}"
 
@@ -67,6 +98,11 @@ set_led_mode() {
 set_led_mode USB
 
 echo "[USB MODE] Przełączanie na tryb CNC (USB)..."
+
+if ! ensure_usb_image; then
+    echo "Brak obrazu USB: ${IMG}"
+    exit 1
+fi
 
 # Odmontuj obraz jeśli jest zamontowany
 if mountpoint -q "${MOUNT}"; then

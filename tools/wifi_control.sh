@@ -41,7 +41,7 @@ case "${command}" in
       usage
       exit 2
     fi
-    exec sudo -n "${NMCLI_BIN}" -t -f NAME,TYPE,802-11-wireless.ssid connection show
+    exec sudo -n "${NMCLI_BIN}" -t -f NAME,TYPE connection show
     ;;
   connect)
     if [[ $# -lt 1 || $# -gt 2 ]]; then

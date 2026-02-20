@@ -43,6 +43,41 @@ if ! command -v systemctl >/dev/null 2>&1; then
     exit 1
 fi
 
+create_usb_image_if_missing() {
+    local image_path="${CNC_USB_IMG:-}"
+    local size_mb="${CNC_USB_IMG_SIZE_MB:-1024}"
+
+    if [ -z "${image_path}" ]; then
+        echo "[WARN] Brak CNC_USB_IMG w ${ENV_DEST}. Pomijam tworzenie obrazu USB."
+        return 0
+    fi
+
+    if [ -e "${image_path}" ] && [ ! -f "${image_path}" ]; then
+        echo "Sciezka CNC_USB_IMG nie wskazuje na zwykly plik: ${image_path}"
+        exit 1
+    fi
+
+    if [ -f "${image_path}" ] && [ -s "${image_path}" ]; then
+        return 0
+    fi
+
+    if ! [[ "${size_mb}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Nieprawidlowa wartosc CNC_USB_IMG_SIZE_MB: ${size_mb}"
+        exit 1
+    fi
+
+    if ! command -v mkfs.vfat >/dev/null 2>&1; then
+        echo "Brak mkfs.vfat. Zainstaluj pakiet dosfstools."
+        exit 1
+    fi
+
+    mkdir -p "$(dirname "${image_path}")"
+    truncate -s "${size_mb}M" "${image_path}"
+    mkfs.vfat -F 32 "${image_path}" >/dev/null
+    chmod 664 "${image_path}"
+    echo "[INFO] Utworzono obraz USB: ${image_path} (${size_mb}MB)"
+}
+
 if [ ! -f "${SYSTEMD_SERVICE_SRC}" ]; then
     echo "Brak pliku unita: ${SYSTEMD_SERVICE_SRC}"
     exit 1
@@ -80,7 +115,7 @@ fi
 
 if command -v dpkg >/dev/null 2>&1; then
     missing_pkgs=()
-    for pkg in hostapd dnsmasq; do
+    for pkg in hostapd dnsmasq dosfstools; do
         if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
             missing_pkgs+=("${pkg}")
         fi
@@ -108,8 +143,15 @@ fi
 chown root:root "${ENV_DEST}"
 chmod 644 "${ENV_DEST}"
 
+# shellcheck source=/etc/cnc-control/cnc-control.env
+set -a
+source "${ENV_DEST}"
+set +a
+
 chown root:root /var/lib/cnc-control
 chmod 755 /var/lib/cnc-control
+
+create_usb_image_if_missing
 
 if mountpoint -q "${SAMBA_SHARE_PATH}"; then
     echo "[INFO] ${SAMBA_SHARE_PATH} jest zamontowany – pomijam chown"

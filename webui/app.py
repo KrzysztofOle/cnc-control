@@ -1617,13 +1617,16 @@ def parse_wifi_profiles_output(output):
         if not line.strip():
             continue
         fields = split_nmcli_fields(line)
-        if len(fields) < 3:
+        if len(fields) < 2:
             continue
-        name, connection_type, ssid = fields[:3]
+        name, connection_type = fields[:2]
+        ssid = fields[2] if len(fields) >= 3 else name
         if connection_type.strip() != "wifi":
             continue
         name = name.strip()
         ssid = ssid.strip()
+        if not ssid:
+            ssid = name
         if not name or not ssid:
             continue
         profiles.append({"name": name, "ssid": ssid})

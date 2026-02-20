@@ -45,10 +45,36 @@ fi
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
 
-if [ ! -f "${IMG}" ]; then
-    echo "Brak obrazu USB: ${IMG}"
-    exit 1
-fi
+ensure_usb_image() {
+    local size_mb="${CNC_USB_IMG_SIZE_MB:-1024}"
+
+    if [ -e "${IMG}" ] && [ ! -f "${IMG}" ]; then
+        echo "Sciezka CNC_USB_IMG nie wskazuje na zwykly plik: ${IMG}"
+        return 1
+    fi
+
+    if [ -f "${IMG}" ] && [ -s "${IMG}" ]; then
+        return 0
+    fi
+
+    if ! [[ "${size_mb}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Nieprawidlowa wartosc CNC_USB_IMG_SIZE_MB: ${size_mb}"
+        return 1
+    fi
+
+    if ! command -v mkfs.vfat >/dev/null 2>&1; then
+        echo "Brak mkfs.vfat. Zainstaluj pakiet dosfstools."
+        return 1
+    fi
+
+    local image_dir
+    image_dir="$(dirname "${IMG}")"
+    echo "Tworzenie obrazu USB (${size_mb}MB): ${IMG}"
+    sudo mkdir -p "${image_dir}"
+    sudo truncate -s "${size_mb}M" "${IMG}"
+    sudo mkfs.vfat -F 32 "${IMG}" >/dev/null
+    sudo chmod 664 "${IMG}"
+}
 
 ensure_loop_support() {
     if ! lsmod | grep -q '^loop'; then
@@ -86,6 +112,11 @@ set_led_mode() {
 set_led_mode UPLOAD
 
 echo "[NET MODE] Przełączanie na tryb sieciowy (upload)..."
+
+if ! ensure_usb_image; then
+    echo "Brak obrazu USB: ${IMG}"
+    exit 1
+fi
 
 # Odłącz USB gadget
 if lsmod | grep -q g_mass_storage; then
