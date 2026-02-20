@@ -45,6 +45,25 @@ fi
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
 
+if [ ! -f "${IMG}" ]; then
+    echo "Brak obrazu USB: ${IMG}"
+    exit 1
+fi
+
+ensure_loop_support() {
+    if ! lsmod | grep -q '^loop'; then
+        echo "Ladowanie sterownika loop..."
+        sudo modprobe loop
+    fi
+
+    if command -v losetup >/dev/null 2>&1; then
+        if ! sudo losetup -f >/dev/null 2>&1; then
+            echo "Brak wolnego loop device."
+            return 1
+        fi
+    fi
+}
+
 set_led_mode() {
     local mode="${1}"
 
@@ -76,6 +95,8 @@ fi
 
 # Zamontuj obraz lokalnie
 if ! mountpoint -q "${MOUNT}"; then
+    sudo mkdir -p "${MOUNT}"
+    ensure_loop_support
     echo "Montowanie obrazu FAT..."
     sudo mount -o loop,rw,uid=1000,gid=1000,fmask=0022,dmask=0022 "${IMG}" "${MOUNT}"
 fi

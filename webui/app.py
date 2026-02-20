@@ -1971,6 +1971,38 @@ def redirect_to_next(message=None):
     return redirect(url_for("index"))
 
 
+def run_mode_script(script_path, mode_label):
+    try:
+        result = subprocess.run(
+            [script_path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        app.logger.error("Nie mozna uruchomic skryptu trybu %s: %s", mode_label, exc)
+        return False, f"Blad przelaczania na tryb: {mode_label}"
+
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    if result.returncode != 0:
+        app.logger.error(
+            "Skrypt trybu %s zakonczyl sie bledem (rc=%s). stdout='%s' stderr='%s'",
+            mode_label,
+            result.returncode,
+            stdout,
+            stderr,
+        )
+        detail = stderr or stdout
+        if detail:
+            return False, f"Blad trybu {mode_label}: {detail}"
+        return False, f"Blad przelaczania na tryb: {mode_label}"
+
+    if stderr:
+        app.logger.warning("Skrypt trybu %s stderr: %s", mode_label, stderr)
+    return True, None
+
+
 @app.route("/")
 def index():
     usb = is_usb_mode()
@@ -2010,13 +2042,17 @@ def system():
 
 @app.route("/net", methods=["POST"])
 def net():
-    subprocess.call([NET_MODE_SCRIPT])
-    return redirect(url_for("index"))
+    ok, error_message = run_mode_script(NET_MODE_SCRIPT, "SIEĆ (UPLOAD)")
+    if not ok:
+        return redirect(url_for("index", msg=error_message))
+    return redirect(url_for("index", msg="Tryb SIEĆ aktywny"))
 
 @app.route("/usb", methods=["POST"])
 def usb():
-    subprocess.call([USB_MODE_SCRIPT])
-    return redirect(url_for("index"))
+    ok, error_message = run_mode_script(USB_MODE_SCRIPT, "USB (CNC)")
+    if not ok:
+        return redirect(url_for("index", msg=error_message))
+    return redirect(url_for("index", msg="Tryb USB aktywny"))
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
@@ -2379,6 +2415,15 @@ def upload():
 
     if is_usb_mode():
         return redirect(url_for("index", msg="Tryb USB: upload niedostępny"))
+
+    mount_active = is_mount_active(UPLOAD_DIR)
+    if mount_active is not True:
+        log_webui_event(
+            f"Upload blocked: upload dir not mounted ({UPLOAD_DIR}), mount_active={mount_active}"
+        )
+        return redirect(
+            url_for("index", msg="Upload niedostepny: obraz USB nie jest zamontowany")
+        )
 
     if "file" not in request.files:
         return redirect(url_for("index", msg="Brak pliku w żądaniu"))
