@@ -117,10 +117,13 @@ _LED_IDLE_SET = False
 
 def _set_led_mode(mode_name):
     candidates = []
+    cli_script = os.path.join(REPO_ROOT, "led_status_cli.py")
     if sys.executable:
+        candidates.append([sys.executable, cli_script, mode_name])
         candidates.append([sys.executable, "-m", "led_status_cli", mode_name])
     candidates.extend(
         [
+            ["python3", cli_script, mode_name],
             ["python", "-m", "led_status_cli", mode_name],
             ["python3", "-m", "led_status_cli", mode_name],
         ]
@@ -133,21 +136,27 @@ def _set_led_mode(mode_name):
             continue
         seen.add(key)
         try:
-            subprocess.run(
+            result = subprocess.run(
                 command,
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=2,
             )
-            return
+            if result.returncode == 0:
+                return
+            app.logger.warning(
+                "LED CLI zakonczyl sie kodem %s (%s).",
+                result.returncode,
+                " ".join(command),
+            )
         except FileNotFoundError:
             continue
         except Exception as exc:
             app.logger.warning("Nie mozna ustawic trybu LED (%s): %s", mode_name, exc)
-            return
+            continue
 
-    app.logger.warning("Nie znaleziono interpretera Python do LED CLI.")
+    app.logger.warning("Nie udalo sie ustawic trybu LED: %s", mode_name)
 
 
 if hasattr(app, "before_serving"):

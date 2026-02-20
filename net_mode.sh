@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${SCRIPT_DIR}"
+VENV_DIR="${CNC_VENV_DIR:-${REPO_ROOT}/.venv}"
+VENV_PYTHON="${VENV_DIR}/bin/python3"
+
 ENV_FILE="/etc/cnc-control/cnc-control.env"
 if [ ! -f "${ENV_FILE}" ]; then
     echo "Brak pliku konfiguracji: ${ENV_FILE}"
@@ -33,11 +38,26 @@ fi
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
 
-if command -v python >/dev/null 2>&1; then
-    python -m led_status_cli UPLOAD >/dev/null 2>&1 || true
-elif command -v python3 >/dev/null 2>&1; then
-    python3 -m led_status_cli UPLOAD >/dev/null 2>&1 || true
-fi
+set_led_mode() {
+    local mode="${1}"
+
+    if [ -x "${VENV_PYTHON}" ]; then
+        if "${VENV_PYTHON}" "${REPO_ROOT}/led_status_cli.py" "${mode}" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        if python3 "${REPO_ROOT}/led_status_cli.py" "${mode}" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    echo "[WARN] Nie mozna ustawic trybu LED: ${mode}" >&2
+    return 0
+}
+
+set_led_mode UPLOAD
 
 echo "[NET MODE] Przełączanie na tryb sieciowy (upload)..."
 
@@ -53,10 +73,6 @@ if ! mountpoint -q "${MOUNT}"; then
     sudo mount -o loop,rw,uid=1000,gid=1000,fmask=0022,dmask=0022 "${IMG}" "${MOUNT}"
 fi
 
-if command -v python >/dev/null 2>&1; then
-    python -m led_status_cli UPLOAD >/dev/null 2>&1 || true
-elif command -v python3 >/dev/null 2>&1; then
-    python3 -m led_status_cli UPLOAD >/dev/null 2>&1 || true
-fi
+set_led_mode UPLOAD
 
 echo "[NET MODE] Gotowe. Możesz kopiować pliki przez sieć."
