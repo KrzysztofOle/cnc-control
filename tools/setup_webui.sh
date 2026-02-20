@@ -14,11 +14,16 @@ else
 fi
 WEBUI_DIR="${REPO_ROOT}/webui"
 WEBUI_APP="${WEBUI_DIR}/app.py"
+VENV_DIR="${CNC_VENV_DIR:-${REPO_ROOT}/.venv}"
 
-PYTHON_BIN="$(command -v python3 || true)"
-if [ -z "${PYTHON_BIN}" ]; then
-    echo "Brak python3 w PATH."
-    exit 1
+PYTHON_BIN="${VENV_DIR}/bin/python3"
+if [ ! -x "${PYTHON_BIN}" ]; then
+    PYTHON_BIN="$(command -v python3 || true)"
+    if [ -z "${PYTHON_BIN}" ]; then
+        echo "Brak python3 w PATH."
+        exit 1
+    fi
+    echo "[WARN] Brak interpretera venv (${VENV_DIR}/bin/python3). Uzywam systemowego: ${PYTHON_BIN}"
 fi
 
 if ! command -v systemctl >/dev/null 2>&1; then

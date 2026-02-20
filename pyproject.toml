@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cnc-control"
+version = "0.0.0"
+description = "CNC helper utilities for Raspberry Pi and RichAuto A11/A11E"
+readme = "README_EN.md"
+requires-python = ">=3.9"
+dependencies = [
+    "Flask>=2.2,<4",
+    "Werkzeug>=2.2,<4",
+]
+
+[project.optional-dependencies]
+rpi = [
+    "rpi-ws281x>=5.0.0",
+]
+
+[tool.setuptools]
+py-modules = ["led_status", "led_status_cli"]

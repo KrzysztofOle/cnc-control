@@ -14,14 +14,15 @@ else
 fi
 
 LED_APP="${REPO_ROOT}/led_status.py"
-
-PYTHON_BIN="$(command -v python || true)"
-if [ -z "${PYTHON_BIN}" ]; then
+VENV_DIR="${CNC_VENV_DIR:-${REPO_ROOT}/.venv}"
+PYTHON_BIN="${VENV_DIR}/bin/python3"
+if [ ! -x "${PYTHON_BIN}" ]; then
     PYTHON_BIN="$(command -v python3 || true)"
-fi
-if [ -z "${PYTHON_BIN}" ]; then
-    echo "Brak python/python3 w PATH."
-    exit 1
+    if [ -z "${PYTHON_BIN}" ]; then
+        echo "Brak python3 w PATH."
+        exit 1
+    fi
+    echo "[WARN] Brak interpretera venv (${VENV_DIR}/bin/python3). Uzywam systemowego: ${PYTHON_BIN}"
 fi
 
 if ! command -v systemctl >/dev/null 2>&1; then
