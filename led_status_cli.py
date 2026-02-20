@@ -20,7 +20,27 @@ def _write_mode_atomic(mode_name: str, path: str) -> None:
             handle.write(f"{mode_name}\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+
+        replaced = False
+        try:
+            os.replace(tmp_path, path)
+            replaced = True
+        except PermissionError:
+            if not os.path.exists(path):
+                raise
+
+        if not replaced:
+            with open(path, "r+", encoding="utf-8") as handle:
+                handle.seek(0)
+                handle.write(f"{mode_name}\n")
+                handle.truncate()
+                handle.flush()
+                os.fsync(handle.fileno())
+
+        try:
+            os.chmod(path, 0o666)
+        except OSError:
+            pass
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)

@@ -222,8 +222,20 @@ def _read_mode_file(path: str) -> Optional[LedMode]:
         return None
 
 
+def _prepare_mode_file(path: str) -> None:
+    directory = os.path.dirname(path) or "."
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o666)
+        os.close(fd)
+        os.chmod(path, 0o666)
+    except OSError as exc:
+        _LOGGER.warning("Nie mozna przygotowac pliku IPC LED (%s): %s", path, exc)
+
+
 def _run_daemon() -> int:
     _configure_logging()
+    _prepare_mode_file(MODE_FILE_PATH)
 
     lock = _SingleInstanceLock(LOCK_FILE_PATH)
     if not lock.acquire():
