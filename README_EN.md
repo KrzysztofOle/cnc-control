@@ -91,7 +91,7 @@ The script automatically:
 - updates the system (`apt update/upgrade`),
 - creates `.venv` and installs dependencies from `pyproject.toml` (with an attempted `rpi-ws281x` extra),
 - clones/updates the `cnc-control` repository over HTTPS,
-- runs `setup_system.sh`, `setup_commands.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+- runs `setup_system.sh`, `setup_commands.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
 
 Optional user and repo directory override:
 

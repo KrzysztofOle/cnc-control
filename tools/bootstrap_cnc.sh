@@ -111,18 +111,18 @@ REPO_URL="${CNC_REPO_URL:-${REPO_URL_DEFAULT}}"
 REPO_DIR="${CNC_REPO_DIR:-${INSTALL_HOME}/cnc-control}"
 VENV_DIR="${CNC_VENV_DIR:-${REPO_DIR}/.venv}"
 
-echo "[1/8] Aktualizacja systemu"
+echo "[1/9] Aktualizacja systemu"
 run_as_root apt-get update
 run_as_root env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 
-echo "[2/8] Instalacja pakietow"
+echo "[2/9] Instalacja pakietow"
 run_as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
 
-echo "[3/8] Uruchamianie uslug bazowych"
+echo "[3/9] Uruchamianie uslug bazowych"
 run_as_root systemctl enable --now ssh
 run_as_root systemctl enable --now NetworkManager
 
-echo "[4/8] Klonowanie lub aktualizacja repozytorium (${REPO_URL})"
+echo "[4/9] Klonowanie lub aktualizacja repozytorium (${REPO_URL})"
 run_as_install_user mkdir -p "$(dirname "${REPO_DIR}")"
 if [ -d "${REPO_DIR}/.git" ]; then
     run_as_install_user git -C "${REPO_DIR}" remote set-url origin "${REPO_URL}"
@@ -141,7 +141,7 @@ if [ -z "${PYTHON3_BIN}" ]; then
     exit 1
 fi
 
-echo "[5/8] Konfiguracja srodowiska Python (venv + pyproject)"
+echo "[5/9] Konfiguracja srodowiska Python (venv + pyproject)"
 run_as_install_user "${PYTHON3_BIN}" -m venv "${VENV_DIR}"
 VENV_PIP="${VENV_DIR}/bin/pip"
 if [ ! -x "${VENV_PIP}" ]; then
@@ -156,13 +156,16 @@ else
     run_as_install_user "${VENV_PIP}" install --upgrade "${REPO_DIR}"
 fi
 
-echo "[6/8] Instalacja konfiguracji systemowej cnc-control"
+echo "[6/9] Instalacja konfiguracji systemowej cnc-control"
 run_as_root bash "${REPO_DIR}/tools/setup_system.sh"
 
-echo "[7/8] Instalacja skrotow CLI"
+echo "[7/9] Instalacja skrotow CLI"
 run_as_root bash "${REPO_DIR}/tools/setup_commands.sh"
 
-echo "[8/8] Instalacja uslug systemd (WebUI + USB + LED)"
+echo "[8/9] Instalacja menu Wi-Fi (nmtui + komenda wifi)"
+run_as_root env SUDO_USER="${INSTALL_USER}" bash "${REPO_DIR}/tools/setup_nmtui.sh"
+
+echo "[9/9] Instalacja uslug systemd (WebUI + USB + LED)"
 run_as_root env SUDO_USER="${INSTALL_USER}" CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_webui.sh" "${REPO_DIR}"
 run_as_root bash "${REPO_DIR}/tools/setup_usb_service.sh" "${REPO_DIR}"
 run_as_root env CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_led_service.sh" "${REPO_DIR}"

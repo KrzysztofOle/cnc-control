@@ -88,7 +88,7 @@ Skrypt automatycznie:
 - zaktualizuje system (`apt update/upgrade`),
 - utworzy `.venv` i zainstaluje zależności z `pyproject.toml` (z próbą dodatku `rpi-ws281x`),
 - pobierze/odświeży repo `cnc-control` po HTTPS,
-- uruchomi `setup_system.sh`, `setup_commands.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+- uruchomi `setup_system.sh`, `setup_commands.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
 
 Opcjonalne nadpisanie użytkownika i katalogu repo:
 
