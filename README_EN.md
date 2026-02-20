@@ -83,13 +83,13 @@ On your local machine:
 curl -fsSL -o bootstrap_cnc.sh \
   https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
 chmod +x bootstrap_cnc.sh
-scp bootstrap_cnc.sh pi@<RPI_IP>:/home/pi/bootstrap_cnc.sh
+scp bootstrap_cnc.sh <RPI_USER>@<RPI_IP>:~/bootstrap_cnc.sh
 ```
 
 On Raspberry Pi:
 
 ```bash
-ssh pi@<RPI_IP>
+ssh <RPI_USER>@<RPI_IP>
 chmod +x ~/bootstrap_cnc.sh
 ~/bootstrap_cnc.sh
 ```
@@ -103,7 +103,7 @@ The script automatically:
 Optional user and repo directory override:
 
 ```bash
-CNC_INSTALL_USER=pi CNC_REPO_DIR=/home/pi/cnc-control ~/bootstrap_cnc.sh
+CNC_INSTALL_USER=<RPI_USER> CNC_REPO_DIR=/home/<RPI_USER>/cnc-control ~/bootstrap_cnc.sh
 ```
 
 ---
