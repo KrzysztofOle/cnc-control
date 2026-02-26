@@ -143,6 +143,25 @@ resolve_boot_file() {
     return 1
 }
 
+resolve_active_boot_file() {
+    local candidate=""
+    local mount_dir=""
+
+    for candidate in "$@"; do
+        if [ ! -f "${candidate}" ]; then
+            continue
+        fi
+
+        mount_dir="$(dirname "${candidate}")"
+        if awk -v p="${mount_dir}" '$2 == p { found=1 } END { exit !found }' /proc/mounts 2>/dev/null; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    resolve_boot_file "$@"
+}
+
 get_env_value() {
     local file_path="$1"
     local key="$2"
@@ -194,17 +213,32 @@ check_boot() {
     local config_file=""
     local cmdline_file=""
     local line_count=""
+    local dwc2_line=""
 
-    config_file="$(resolve_boot_file "/boot/config.txt" "/boot/firmware/config.txt" || true)"
+    config_file="$(resolve_active_boot_file "/boot/firmware/config.txt" "/boot/config.txt" || true)"
     if [ -z "${config_file}" ]; then
         add_check "boot" "CRITICAL" "FAIL" "Boot overlay dwc2" "Missing /boot/config.txt (or /boot/firmware/config.txt)"
-    elif sed 's/[[:space:]]*#.*$//' "${config_file}" | grep -Eiq '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*dwc2([[:space:]]*,.*)?[[:space:]]*$'; then
-        add_check "boot" "CRITICAL" "PASS" "Boot overlay dwc2" "${config_file}"
+        add_check "boot" "CRITICAL" "FAIL" "Boot dwc2 peripheral mode" "Missing /boot/config.txt (or /boot/firmware/config.txt)"
     else
-        add_check "boot" "CRITICAL" "FAIL" "Boot overlay dwc2" "No active dtoverlay=dwc2 in ${config_file}"
+        dwc2_line="$(sed 's/[[:space:]]*#.*$//' "${config_file}" | grep -Ei '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*dwc2([[:space:]]*,.*)?[[:space:]]*$' | head -n 1 || true)"
+
+        if [ -n "${dwc2_line}" ]; then
+            add_check "boot" "CRITICAL" "PASS" "Boot overlay dwc2" "${config_file}"
+
+            if printf '%s' "${dwc2_line}" | grep -Eiq 'dr_mode[[:space:]]*=[[:space:]]*host'; then
+                add_check "boot" "CRITICAL" "FAIL" "Boot dwc2 peripheral mode" "Detected dr_mode=host in ${config_file}: ${dwc2_line}"
+            elif printf '%s' "${dwc2_line}" | grep -Eiq 'dr_mode[[:space:]]*=[[:space:]]*peripheral'; then
+                add_check "boot" "CRITICAL" "PASS" "Boot dwc2 peripheral mode" "${dwc2_line}"
+            else
+                add_check "boot" "CRITICAL" "FAIL" "Boot dwc2 peripheral mode" "Missing dr_mode=peripheral in ${config_file}: ${dwc2_line}"
+            fi
+        else
+            add_check "boot" "CRITICAL" "FAIL" "Boot overlay dwc2" "No active dtoverlay=dwc2 in ${config_file}"
+            add_check "boot" "CRITICAL" "FAIL" "Boot dwc2 peripheral mode" "Missing active dtoverlay=dwc2 in ${config_file}"
+        fi
     fi
 
-    cmdline_file="$(resolve_boot_file "/boot/cmdline.txt" "/boot/firmware/cmdline.txt" || true)"
+    cmdline_file="$(resolve_active_boot_file "/boot/firmware/cmdline.txt" "/boot/cmdline.txt" || true)"
     if [ -z "${cmdline_file}" ]; then
         add_check "boot" "CRITICAL" "FAIL" "Boot modules-load=dwc2" "Missing /boot/cmdline.txt (or /boot/firmware/cmdline.txt)"
         add_check "boot" "CRITICAL" "FAIL" "Boot cmdline single line" "Missing /boot/cmdline.txt (or /boot/firmware/cmdline.txt)"
@@ -259,8 +293,13 @@ check_gadget() {
     local udc_value=""
     local image_path=""
 
+    if command -v lsmod >/dev/null 2>&1 && lsmod | awk '{print $1}' | grep -qx "g_mass_storage"; then
+        add_check "gadget" "CRITICAL" "PASS" "USB gadget g_mass_storage loaded" "Loaded"
+        return
+    fi
+
     if [ ! -d "${gadget_dir}" ]; then
-        add_check "gadget" "CRITICAL" "FAIL" "USB gadget g1 present" "${gadget_dir} not found"
+        add_check "gadget" "CRITICAL" "FAIL" "USB gadget g1 present" "${gadget_dir} not found and g_mass_storage is not loaded"
         return
     fi
     add_check "gadget" "CRITICAL" "PASS" "USB gadget g1 present" "${gadget_dir}"

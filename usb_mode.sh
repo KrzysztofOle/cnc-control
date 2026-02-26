@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 if command -v readlink >/dev/null 2>&1; then
@@ -44,6 +44,63 @@ fi
 
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
+
+get_udc_name() {
+    if [ ! -d "/sys/class/udc" ]; then
+        return 0
+    fi
+    ls -A "/sys/class/udc" 2>/dev/null | head -n 1 || true
+}
+
+ensure_udc_available() {
+    local udc_name=""
+    local cfg_line=""
+    local cmdline_file=""
+
+    udc_name="$(get_udc_name)"
+    if [ -n "${udc_name}" ]; then
+        echo "Wykryto UDC: ${udc_name}"
+        return 0
+    fi
+
+    # PL: Proba naprawy bez restartu - przeladowanie dwc2 w trybie peripheral.
+    # EN: Recovery attempt without reboot - reload dwc2 in peripheral mode.
+    echo "Brak UDC. Proba przeladowania dwc2 (peripheral)..."
+    if lsmod | grep -q '^g_mass_storage'; then
+        sudo modprobe -r g_mass_storage || true
+    fi
+    if lsmod | grep -q '^dwc2'; then
+        sudo modprobe -r dwc2 || true
+    fi
+
+    if ! sudo modprobe dwc2 dr_mode=peripheral 2>/dev/null; then
+        sudo modprobe dwc2
+    fi
+    sleep 1
+
+    udc_name="$(get_udc_name)"
+    if [ -n "${udc_name}" ]; then
+        echo "Wykryto UDC po przeladowaniu: ${udc_name}"
+        return 0
+    fi
+
+    echo "Brak dostepnego UDC (/sys/class/udc puste)."
+    cfg_line="$(grep -h -E '^[[:space:]]*dtoverlay=dwc2' /boot/firmware/config.txt /boot/config.txt 2>/dev/null | tail -n 1 || true)"
+    if [ -n "${cfg_line}" ]; then
+        echo "Aktualny wpis dtoverlay: ${cfg_line}"
+    fi
+    cmdline_file=""
+    if [ -f "/boot/firmware/cmdline.txt" ]; then
+        cmdline_file="/boot/firmware/cmdline.txt"
+    elif [ -f "/boot/cmdline.txt" ]; then
+        cmdline_file="/boot/cmdline.txt"
+    fi
+    if [ -n "${cmdline_file}" ]; then
+        echo "cmdline (${cmdline_file}): $(cat "${cmdline_file}")"
+    fi
+    echo "Sprawdz: dtoverlay=dwc2,dr_mode=peripheral oraz kabel DATA w porcie USB (nie PWR IN)."
+    return 1
+}
 
 ensure_usb_image() {
     local size_mb="${CNC_USB_IMG_SIZE_MB:-1024}"
@@ -121,6 +178,10 @@ fi
 if ! lsmod | grep -q '^dwc2'; then
     echo "Ladowanie sterownika dwc2..."
     sudo modprobe dwc2
+fi
+
+if ! ensure_udc_available; then
+    exit 1
 fi
 
 # Podłącz gadget w trybie RO

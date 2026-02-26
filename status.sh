@@ -32,19 +32,34 @@ fi
 IMG="${CNC_USB_IMG}"
 MOUNT="${CNC_MOUNT_POINT}"
 
+get_udc_name() {
+    if [ ! -d "/sys/class/udc" ]; then
+        return 0
+    fi
+    ls -A "/sys/class/udc" 2>/dev/null | head -n 1 || true
+}
+
 echo "=============================="
 echo " CNC USB STATUS"
 echo "=============================="
 
 # Sprawdzenie trybu
-if lsmod | grep -q g_mass_storage; then
+UDC_NAME="$(get_udc_name)"
+if lsmod | grep -q g_mass_storage && [ -n "${UDC_NAME}" ]; then
     MODE="USB (CNC)"
+elif lsmod | grep -q g_mass_storage; then
+    MODE="USB (NIEAKTYWNY - BRAK UDC)"
 else
     MODE="SIEĆ (UPLOAD)"
 fi
 
 echo "Tryb pracy: $MODE"
 echo "Punkt montowania: $MOUNT"
+if [ -n "${UDC_NAME}" ]; then
+    echo "UDC: ${UDC_NAME}"
+else
+    echo "UDC: BRAK"
+fi
 
 # Sprawdzenie montowania
 if mount | grep -q "$IMG"; then
