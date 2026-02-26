@@ -11,6 +11,8 @@ TARGET_DIR=""
 USE_SUDO="false"
 CURRENT_USER="${SUDO_USER:-$USER}"
 CURRENT_HOME="$(getent passwd "${CURRENT_USER}" | cut -d: -f6 2>/dev/null || true)"
+RC_FILES=("${CURRENT_HOME}/.bashrc" "${CURRENT_HOME}/.zshrc")
+ALIAS_LINE="alias selftest='cnc_selftest'"
 
 if [ -z "${CURRENT_HOME}" ]; then
     CURRENT_HOME="${HOME}"
@@ -49,7 +51,6 @@ done
 
 if [ "${TARGET_DIR}" = "${CURRENT_HOME}/.local/bin" ]; then
     PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
-    RC_FILES=("${CURRENT_HOME}/.bashrc" "${CURRENT_HOME}/.zshrc")
     for rc_file in "${RC_FILES[@]}"; do
         if [ ! -f "${rc_file}" ]; then
             continue
@@ -69,6 +70,26 @@ if [ "${TARGET_DIR}" = "${CURRENT_HOME}/.local/bin" ]; then
         echo "${PATH_LINE}" >> "${BASHRC}"
         echo "Dodano PATH do ${BASHRC}. Uruchom: source ${BASHRC}"
     fi
+fi
+
+for rc_file in "${RC_FILES[@]}"; do
+    if [ ! -f "${rc_file}" ]; then
+        continue
+    fi
+    if ! grep -Eq "^[[:space:]]*alias[[:space:]]+selftest=" "${rc_file}" 2>/dev/null; then
+        echo "" >> "${rc_file}"
+        echo "# CNC Control alias" >> "${rc_file}"
+        echo "${ALIAS_LINE}" >> "${rc_file}"
+        echo "Dodano alias selftest do ${rc_file}. Uruchom: source ${rc_file}"
+    fi
+done
+
+if [ ! -f "${CURRENT_HOME}/.bashrc" ] && [ ! -f "${CURRENT_HOME}/.zshrc" ]; then
+    BASHRC="${CURRENT_HOME}/.bashrc"
+    echo "" >> "${BASHRC}"
+    echo "# CNC Control alias" >> "${BASHRC}"
+    echo "${ALIAS_LINE}" >> "${BASHRC}"
+    echo "Dodano alias selftest do ${BASHRC}. Uruchom: source ${BASHRC}"
 fi
 
 echo "Gotowe. Komendy dostepne: usb_mode, net_mode, status, cnc_selftest"
