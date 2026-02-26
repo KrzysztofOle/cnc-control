@@ -8,6 +8,12 @@
 - Root access (sudo)
 - Repository located at `/home/andrzej/cnc-control` (required by the systemd unit)
 
+### Hardware platform (target and test)
+
+- Target device: **Raspberry Pi Zero W**.
+- Current tests: **Raspberry Pi Zero 2 W** (higher performance and smooth VS Code workflow).
+- Every configuration change must be designed for the target **Raspberry Pi Zero W**.
+
 ## Quick bootstrap on Raspberry Pi (recommended)
 
 Simplest installation path without manual repository clone:

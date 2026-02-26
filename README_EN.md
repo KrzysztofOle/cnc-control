@@ -39,6 +39,14 @@ The project is developed as a **practical workshop-oriented solution**, not as a
 
 ---
 
+## 🎯 Target and Test Platform
+
+- Project target device: **Raspberry Pi Zero W**.
+- Current test platform: **Raspberry Pi Zero 2 W** (better performance and smoother VS Code workflow).
+- All configuration changes must remain compatible with **Raspberry Pi Zero W** as the target platform.
+
+---
+
 ## 🧰 Software Requirements
 
 - 🐧 Linux (Raspberry Pi OS Lite recommended)

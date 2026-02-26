@@ -37,6 +37,14 @@ Projekt jest rozwijany hobbystycznie, z naciskiem na **praktyczne zastosowanie w
 
 ---
 
+## 🎯 Platforma docelowa i testowa
+
+- Urządzenie docelowe projektu: **Raspberry Pi Zero W**.
+- Aktualna platforma testowa: **Raspberry Pi Zero 2 W** (lepsza wydajność i wygodniejsza współpraca z VS Code).
+- Wszystkie zmiany konfiguracji muszą zachowywać kompatybilność z **Raspberry Pi Zero W** jako platformą docelową.
+
+---
+
 ## 🧰 Wymagania programowe
 
 - 🐧 Linux (Raspberry Pi OS Lite zalecany)

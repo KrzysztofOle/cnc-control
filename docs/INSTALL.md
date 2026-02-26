@@ -8,6 +8,12 @@
 - Dostęp root (sudo)
 - Repozytorium w ścieżce: `/home/andrzej/cnc-control` (wymagane przez unit systemd)
 
+### Platforma sprzętowa (docelowa i testowa)
+
+- Urządzenie docelowe: **Raspberry Pi Zero W**.
+- Aktualne testy: **Raspberry Pi Zero 2 W** (wyższa wydajność i wygodna współpraca z VS Code).
+- Każda zmiana konfiguracji musi być przygotowana z myślą o docelowym **Raspberry Pi Zero W**.
+
 ## Szybki bootstrap na Raspberry Pi (zalecane)
 
 Najprostsza instalacja bez ręcznego klonowania repozytorium:
