@@ -87,7 +87,7 @@ AP_BLOCK_FLAG = os.environ.get(
 CNC_AP_ENABLED = parse_env_bool(os.environ.get("CNC_AP_ENABLED"), default=False)
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
-    "/home/andrzej/cnc-control",
+    REPO_ROOT,
 )
 WEBUI_LOG_PATH = os.environ.get(
     "CNC_WEBUI_LOG",

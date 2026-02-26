@@ -92,6 +92,40 @@ ensure_backup_file() {
     fi
 }
 
+upsert_env_var() {
+    local env_file="$1"
+    local key="$2"
+    local value="$3"
+    local escaped_value=""
+
+    escaped_value="$(printf '%s' "${value}" | sed -e 's/[\/&]/\\&/g')"
+
+    if grep -qE "^[[:space:]]*${key}=" "${env_file}"; then
+        sed -i -E "s|^[[:space:]]*${key}=.*$|${key}=${escaped_value}|" "${env_file}"
+    else
+        printf '\n%s=%s\n' "${key}" "${value}" >> "${env_file}"
+    fi
+}
+
+has_dwc2_overlay_in_all_section() {
+    local config_file="$1"
+
+    awk '
+        BEGIN { in_all = 0; found = 0 }
+        /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+            if ($0 ~ /^[[:space:]]*\[all\][[:space:]]*$/) {
+                in_all = 1
+            } else {
+                in_all = 0
+            }
+        }
+        in_all && $0 ~ /^[[:space:]]*dtoverlay=dwc2,dr_mode=peripheral([[:space:]]*#.*)?[[:space:]]*$/ {
+            found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "${config_file}"
+}
+
 configure_usb_otg_dwc2() {
     local config_file cmdline_file
     local tmp_file normalized_cmdline
@@ -114,19 +148,29 @@ configure_usb_otg_dwc2() {
 
         tmp_file="$(mktemp)"
         awk -v overlay_line="${DWC2_OVERLAY_LINE}" '
-            BEGIN { seen = 0 }
+            BEGIN { inserted = 0; saw_all = 0 }
             {
                 if ($0 ~ /^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2([[:space:]]*,[^#[:space:]]*)?([[:space:]]*#.*)?[[:space:]]*$/) {
-                    if (seen == 0) {
+                    next
+                }
+
+                if ($0 ~ /^[[:space:]]*\[all\][[:space:]]*$/) {
+                    saw_all = 1
+                    print
+                    if (inserted == 0) {
                         print overlay_line
-                        seen = 1
+                        inserted = 1
                     }
                     next
                 }
+
                 print
             }
             END {
-                if (seen == 0) {
+                if (inserted == 0) {
+                    if (saw_all == 0) {
+                        print "[all]"
+                    }
                     print overlay_line
                 }
             }
@@ -159,7 +203,7 @@ configure_usb_otg_dwc2() {
     rm -f "${tmp_file}"
 
     echo "[INFO] Walidacja USB OTG (dwc2)"
-    if grep -Eq '^[[:space:]]*dtoverlay=dwc2,dr_mode=peripheral([[:space:]]*#.*)?[[:space:]]*$' "${config_file}"; then
+    if has_dwc2_overlay_in_all_section "${config_file}"; then
         echo " - dtoverlay=dwc2,dr_mode=peripheral aktywne: TAK"
     else
         echo " - dtoverlay=dwc2,dr_mode=peripheral aktywne: NIE"
@@ -273,6 +317,7 @@ fi
 
 chown root:root "${ENV_DEST}"
 chmod 644 "${ENV_DEST}"
+upsert_env_var "${ENV_DEST}" "CNC_CONTROL_REPO" "${REPO_ROOT}"
 
 # shellcheck source=/etc/cnc-control/cnc-control.env
 set -a

@@ -167,8 +167,17 @@ run_as_root env SUDO_USER="${INSTALL_USER}" bash "${REPO_DIR}/tools/setup_nmtui.
 
 echo "[9/9] Instalacja uslug systemd (WebUI + USB + LED)"
 run_as_root env SUDO_USER="${INSTALL_USER}" CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_webui.sh" "${REPO_DIR}"
-run_as_root bash "${REPO_DIR}/tools/setup_usb_service.sh" "${REPO_DIR}"
-run_as_root env CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_led_service.sh" "${REPO_DIR}"
+if run_as_root bash "${REPO_DIR}/tools/setup_usb_service.sh" "${REPO_DIR}"; then
+    echo "[INFO] Usluga USB zainstalowana."
+else
+    echo "[WARN] Nie udalo sie skonfigurowac uslugi USB. Kontynuuje konfiguracje."
+fi
+
+if run_as_root env CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_led_service.sh" "${REPO_DIR}"; then
+    echo "[INFO] Usluga LED zainstalowana."
+else
+    echo "[WARN] Nie udalo sie skonfigurowac uslugi LED."
+fi
 
 echo "=== CNC Bootstrap Done ==="
 echo "Repozytorium: ${REPO_DIR}"

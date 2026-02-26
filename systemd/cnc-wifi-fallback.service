@@ -6,7 +6,7 @@ Wants=NetworkManager.service
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/cnc-control/cnc-control.env
-ExecStart=/home/andrzej/cnc-control/tools/wifi_fallback.sh
+ExecStart=/bin/bash -lc 'exec "${CNC_CONTROL_REPO:-/home/cnc/cnc-control}/tools/wifi_fallback.sh"'
 
 [Install]
 WantedBy=multi-user.target
