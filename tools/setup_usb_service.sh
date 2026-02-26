@@ -26,6 +26,7 @@ fi
 
 SERVICE_NAME="cnc-usb.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+UDC_PATH="/sys/class/udc"
 
 SERVICE_CONTENT="[Unit]
 Description=CNC USB Mode (RichAuto)
@@ -40,6 +41,16 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 "
 
+restart_or_skip_usb_service() {
+    if [ -d "${UDC_PATH}" ] && [ -n "$(ls -A "${UDC_PATH}" 2>/dev/null)" ]; then
+        systemctl restart "${SERVICE_NAME}"
+        return 0
+    fi
+
+    echo "[WARN] Brak aktywnego UDC (${UDC_PATH} puste). Pomijam restart ${SERVICE_NAME}."
+    echo "[WARN] Wykonaj reboot i uruchom: sudo systemctl restart ${SERVICE_NAME}"
+}
+
 if [ "${EUID}" -ne 0 ]; then
     if ! command -v sudo >/dev/null 2>&1; then
         echo "Brak uprawnien do zapisu w /etc i brak sudo."
@@ -48,12 +59,17 @@ if [ "${EUID}" -ne 0 ]; then
     echo "${SERVICE_CONTENT}" | sudo tee "${SERVICE_PATH}" >/dev/null
     sudo systemctl daemon-reload
     sudo systemctl enable "${SERVICE_NAME}"
-    sudo systemctl restart "${SERVICE_NAME}"
+    if [ -d "${UDC_PATH}" ] && [ -n "$(ls -A "${UDC_PATH}" 2>/dev/null)" ]; then
+        sudo systemctl restart "${SERVICE_NAME}"
+    else
+        echo "[WARN] Brak aktywnego UDC (${UDC_PATH} puste). Pomijam restart ${SERVICE_NAME}."
+        echo "[WARN] Wykonaj reboot i uruchom: sudo systemctl restart ${SERVICE_NAME}"
+    fi
 else
     echo "${SERVICE_CONTENT}" > "${SERVICE_PATH}"
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}"
-    systemctl restart "${SERVICE_NAME}"
+    restart_or_skip_usb_service
 fi
 
 echo "Gotowe. Status: systemctl status ${SERVICE_NAME}"
