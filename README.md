@@ -126,14 +126,22 @@ Opis taga jest wyświetlany w WebUI.
 
 ## ⌨️ Komendy skrótowe (CLI)
 
-Aby uruchamiać tryby jednym poleceniem (`usb_mode`, `net_mode`, `status`), zainstaluj skróty:
+Aby uruchamiać tryby jednym poleceniem (`usb_mode`, `net_mode`, `status`, `cnc_selftest`), zainstaluj skróty:
 
 ```bash
 chmod +x tools/setup_commands.sh
 ./tools/setup_commands.sh
 ```
 
-Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh` i w razie potrzeby dodaje `~/.local/bin` do `PATH` (w `~/.bashrc` i `~/.zshrc`).
+Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh`, `tools/cnc_selftest.sh` i w razie potrzeby dodaje `~/.local/bin` do `PATH` (w `~/.bashrc` i `~/.zshrc`).
+
+## Diagnostyka
+
+```bash
+cnc_selftest
+cnc_selftest --verbose
+cnc_selftest --json
+```
 
 ---
 

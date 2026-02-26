@@ -37,11 +37,116 @@ CLOUD_INIT_UNITS=(
     cloud-config.service
     cloud-init-network.service
 )
+BOOT_CONFIG_BACKUP="/boot/config.txt.bak"
+BOOT_CMDLINE_BACKUP="/boot/cmdline.txt.bak"
+USB_OTG_CHANGED=0
 
 if ! command -v systemctl >/dev/null 2>&1; then
     echo "Brak systemd (systemctl)."
     exit 1
 fi
+
+resolve_boot_file() {
+    local primary="$1"
+    local fallback="$2"
+
+    if [ -f "${primary}" ]; then
+        echo "${primary}"
+        return 0
+    fi
+
+    if [ -f "${fallback}" ]; then
+        echo "${fallback}"
+        return 0
+    fi
+
+    return 1
+}
+
+ensure_backup_file() {
+    local src="$1"
+    local backup="$2"
+
+    if [ ! -f "${backup}" ]; then
+        cp -a "${src}" "${backup}"
+        echo "[INFO] Utworzono kopie zapasowa: ${backup}"
+    fi
+}
+
+configure_usb_otg_dwc2() {
+    local config_file cmdline_file
+    local tmp_file normalized_cmdline
+
+    config_file="$(resolve_boot_file "/boot/config.txt" "/boot/firmware/config.txt")" || {
+        echo "Brak pliku config.txt w /boot ani /boot/firmware."
+        exit 1
+    }
+    cmdline_file="$(resolve_boot_file "/boot/cmdline.txt" "/boot/firmware/cmdline.txt")" || {
+        echo "Brak pliku cmdline.txt w /boot ani /boot/firmware."
+        exit 1
+    }
+
+    tmp_file="$(mktemp)"
+    awk '
+        BEGIN { seen = 0 }
+        {
+            if ($0 ~ /^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2([[:space:]]*,[^#[:space:]]*)?([[:space:]]*#.*)?[[:space:]]*$/) {
+                if (seen == 0) {
+                    line = $0
+                    sub(/^[[:space:]]*#[[:space:]]*/, "", line)
+                    sub(/^[[:space:]]+/, "", line)
+                    print line
+                    seen = 1
+                }
+                next
+            }
+            print
+        }
+        END {
+            if (seen == 0) {
+                print "dtoverlay=dwc2"
+            }
+        }
+    ' "${config_file}" > "${tmp_file}"
+
+    if ! cmp -s "${config_file}" "${tmp_file}"; then
+        ensure_backup_file "${config_file}" "${BOOT_CONFIG_BACKUP}"
+        cp "${tmp_file}" "${config_file}"
+        USB_OTG_CHANGED=1
+    fi
+    rm -f "${tmp_file}"
+
+    normalized_cmdline="$(tr '\n' ' ' < "${cmdline_file}" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    if [ -z "${normalized_cmdline}" ]; then
+        echo "Plik ${cmdline_file} jest pusty."
+        exit 1
+    fi
+    if [[ "${normalized_cmdline}" != *"modules-load=dwc2"* ]]; then
+        normalized_cmdline="${normalized_cmdline} modules-load=dwc2"
+    fi
+
+    tmp_file="$(mktemp)"
+    printf '%s\n' "${normalized_cmdline}" > "${tmp_file}"
+    if ! cmp -s "${cmdline_file}" "${tmp_file}"; then
+        ensure_backup_file "${cmdline_file}" "${BOOT_CMDLINE_BACKUP}"
+        cp "${tmp_file}" "${cmdline_file}"
+        USB_OTG_CHANGED=1
+    fi
+    rm -f "${tmp_file}"
+
+    echo "[INFO] Walidacja USB OTG (dwc2)"
+    if grep -Eq '^[[:space:]]*dtoverlay=dwc2([[:space:]]*,[^#[:space:]]*)?([[:space:]]*#.*)?[[:space:]]*$' "${config_file}"; then
+        echo " - dtoverlay=dwc2 aktywne: TAK"
+    else
+        echo " - dtoverlay=dwc2 aktywne: NIE"
+    fi
+
+    if grep -Eq '(^|[[:space:]])modules-load=dwc2([[:space:]]|,|$)' "${cmdline_file}"; then
+        echo " - modules-load=dwc2 obecne: TAK"
+    else
+        echo " - modules-load=dwc2 obecne: NIE"
+    fi
+}
 
 create_usb_image_if_missing() {
     local image_path="${CNC_USB_IMG:-}"
@@ -133,6 +238,8 @@ if command -v dpkg >/dev/null 2>&1; then
 else
     echo "Brak dpkg. Pomijam sprawdzanie hostapd/dnsmasq."
 fi
+
+configure_usb_otg_dwc2
 
 mkdir -p /etc/cnc-control /var/lib/cnc-control "${SAMBA_SHARE_PATH}"
 
@@ -277,6 +384,11 @@ fi
 
 if systemctl list-unit-files --type=service | grep -q "^nmbd.service"; then
     systemctl disable --now nmbd.service
+fi
+
+if [ "${USB_OTG_CHANGED}" -eq 1 ]; then
+    echo "USB OTG (dwc2) skonfigurowane."
+    echo "Wymagany restart systemu."
 fi
 
 echo "Gotowe. Unit zainstalowany: ${SYSTEMD_SERVICE_DEST}"

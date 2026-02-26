@@ -131,14 +131,22 @@ The tag description is displayed in the WebUI.
 
 ## ⌨️ Shortcut Commands (CLI)
 
-To run modes with single commands (`usb_mode`, `net_mode`, `status`), install shortcuts:
+To run modes with single commands (`usb_mode`, `net_mode`, `status`, `cnc_selftest`), install shortcuts:
 
 ```bash
 chmod +x tools/setup_commands.sh
 ./tools/setup_commands.sh
 ```
 
-The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc` and `~/.zshrc`).
+The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh`, `tools/cnc_selftest.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc` and `~/.zshrc`).
+
+## Diagnostics
+
+```bash
+cnc_selftest
+cnc_selftest --verbose
+cnc_selftest --json
+```
 
 ---
 
