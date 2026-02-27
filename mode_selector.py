@@ -24,6 +24,11 @@ class NetUsbMode:
     start_callback: Callable[[], None]
 
     def start(self) -> None:
+        try:
+            runtime_module = importlib.import_module("shadow.runtime_registry")
+            runtime_module.set_shadow_manager(None)
+        except Exception:
+            pass
         self.start_callback()
 
 
@@ -34,8 +39,10 @@ class ShadowMode:
 
     def start(self) -> None:
         shadow_module = importlib.import_module("shadow.shadow_manager")
+        runtime_module = importlib.import_module("shadow.runtime_registry")
         shadow_manager_class = getattr(shadow_module, "ShadowManager")
         shadow_manager = shadow_manager_class.from_environment(self.environment)
+        runtime_module.set_shadow_manager(shadow_manager)
         shadow_manager.start()
         self.start_callback()
 

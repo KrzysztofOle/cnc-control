@@ -90,6 +90,10 @@ SHADOW_STATE_FILE = os.environ.get(
     "CNC_SHADOW_STATE_FILE",
     "/var/lib/cnc-control/shadow_state.json",
 )
+SHADOW_HISTORY_FILE = os.environ.get(
+    "CNC_SHADOW_HISTORY_FILE",
+    "/var/lib/cnc-control/shadow_history.json",
+)
 SHADOW_MASTER_DIR = os.environ.get(
     "CNC_MASTER_DIR",
     "/var/lib/cnc-control/master",
@@ -302,6 +306,24 @@ HTML = """
   color: #555555;
   background: #f2f2f2;
   border-color: #d6d6d6;
+}
+
+#shadow-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+#shadow-history-table th,
+#shadow-history-table td {
+  border: 1px solid #d9d9d9;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+#shadow-history-table th {
+  background: #f7f7f7;
 }
 
 button {
@@ -545,8 +567,44 @@ body.ui-busy #loading-overlay * {
   </span>
 </div>
 {% if shadow_state.last_error %}
-<p><b>SHADOW ERROR:</b> {{ shadow_state.last_error.code }} - {{ shadow_state.last_error.message }}</p>
+<p id="shadow-error-line"><b>SHADOW ERROR:</b> <span id="shadow-error-code">{{ shadow_state.last_error.code }}</span> - <span id="shadow-error-message">{{ shadow_state.last_error.message }}</span></p>
+{% else %}
+<p id="shadow-error-line" style="display:none;"><b>SHADOW ERROR:</b> <span id="shadow-error-code"></span> - <span id="shadow-error-message"></span></p>
 {% endif %}
+
+<div class="shadow-status-row">
+  <button type="button" id="shadow-manual-rebuild">Manual rebuild</button>
+  <span id="shadow-manual-status" class="wifi-status wifi-status-muted">Status: bezczynny</span>
+</div>
+
+<h4>Historia przebiegow SHADOW</h4>
+<div id="shadow-history-empty" class="wifi-status wifi-status-muted" {% if shadow_history %}style="display:none;"{% endif %}>
+  Brak wpisow historii.
+</div>
+<table id="shadow-history-table" {% if not shadow_history %}style="display:none;"{% endif %}>
+  <thead>
+    <tr>
+      <th>RUN_ID</th>
+      <th>TRIGGER</th>
+      <th>RESULT</th>
+      <th>SLOT</th>
+      <th>CZAS (ms)</th>
+      <th>KONIEC</th>
+    </tr>
+  </thead>
+  <tbody id="shadow-history-body">
+  {% for entry in shadow_history %}
+    <tr>
+      <td>{{ entry.run_id }}</td>
+      <td>{{ entry.trigger }}</td>
+      <td>{{ entry.result }}</td>
+      <td>{{ entry.active_slot_before }}→{{ entry.active_slot_after }}</td>
+      <td>{{ entry.duration_ms }}</td>
+      <td>{{ entry.finished_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 {% endif %}
 
 {% if not shadow_enabled %}
@@ -967,6 +1025,147 @@ body.ui-busy #loading-overlay * {
       );
       fsmBadge.classList.add(fsmClass);
     }
+
+    const errorLine = document.getElementById("shadow-error-line");
+    const errorCode = document.getElementById("shadow-error-code");
+    const errorMessage = document.getElementById("shadow-error-message");
+    if (errorLine && errorCode && errorMessage) {
+      if (shadowState.last_error && typeof shadowState.last_error === "object") {
+        errorCode.textContent = String(shadowState.last_error.code || "ERR");
+        errorMessage.textContent = String(shadowState.last_error.message || "Brak szczegolow");
+        errorLine.style.display = "";
+      } else {
+        errorCode.textContent = "";
+        errorMessage.textContent = "";
+        errorLine.style.display = "none";
+      }
+    }
+  }
+
+  function formatShadowHistoryValue(value) {
+    if (value === null || value === undefined) {
+      return "-";
+    }
+    return String(value);
+  }
+
+  function renderShadowHistory(entries) {
+    const body = document.getElementById("shadow-history-body");
+    const table = document.getElementById("shadow-history-table");
+    const empty = document.getElementById("shadow-history-empty");
+    if (!body || !table || !empty) {
+      return;
+    }
+
+    body.innerHTML = "";
+    if (!Array.isArray(entries) || entries.length === 0) {
+      table.style.display = "none";
+      empty.style.display = "";
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const row = document.createElement("tr");
+      const runIdCell = document.createElement("td");
+      runIdCell.textContent = formatShadowHistoryValue(entry.run_id);
+      row.appendChild(runIdCell);
+
+      const triggerCell = document.createElement("td");
+      triggerCell.textContent = formatShadowHistoryValue(entry.trigger);
+      row.appendChild(triggerCell);
+
+      const resultCell = document.createElement("td");
+      resultCell.textContent = formatShadowHistoryValue(entry.result);
+      row.appendChild(resultCell);
+
+      const slotCell = document.createElement("td");
+      const beforeSlot = formatShadowHistoryValue(entry.active_slot_before);
+      const afterSlot = formatShadowHistoryValue(entry.active_slot_after);
+      slotCell.textContent = `${beforeSlot}→${afterSlot}`;
+      row.appendChild(slotCell);
+
+      const durationCell = document.createElement("td");
+      durationCell.textContent = formatShadowHistoryValue(entry.duration_ms);
+      row.appendChild(durationCell);
+
+      const timeCell = document.createElement("td");
+      timeCell.textContent = formatShadowHistoryValue(entry.finished_at);
+      row.appendChild(timeCell);
+
+      body.appendChild(row);
+    });
+
+    empty.style.display = "none";
+    table.style.display = "";
+  }
+
+  function initShadowControls() {
+    const manualButton = document.getElementById("shadow-manual-rebuild");
+    const statusLabel = document.getElementById("shadow-manual-status");
+    if (!manualButton || !statusLabel) {
+      return;
+    }
+
+    function setShadowStatus(text, level) {
+      statusLabel.textContent = text;
+      statusLabel.classList.remove("wifi-status-ok", "wifi-status-error", "wifi-status-muted");
+      if (level === "ok") {
+        statusLabel.classList.add("wifi-status-ok");
+      } else if (level === "error") {
+        statusLabel.classList.add("wifi-status-error");
+      } else {
+        statusLabel.classList.add("wifi-status-muted");
+      }
+    }
+
+    async function refreshShadowHistory() {
+      try {
+        const response = await fetch("/api/shadow/history?limit=10", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json();
+        renderShadowHistory(payload && payload.history ? payload.history : []);
+      } catch (error) {
+        // PL: Brak historii nie powinien zaklocac glownego UI.
+        // EN: Missing history must not disturb the main UI.
+      }
+    }
+
+    manualButton.addEventListener("click", async () => {
+      if (busy) {
+        return;
+      }
+      manualButton.disabled = true;
+      setShadowStatus("Status: uruchamianie manual_rebuild...", "muted");
+      try {
+        const response = await fetch("/api/shadow/manual-rebuild", {
+          method: "POST",
+          credentials: "same-origin",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.ok) {
+          setShadowStatus("Status: manual_rebuild uruchomiony", "ok");
+        } else {
+          const message = payload && payload.error ? payload.error : ("HTTP " + response.status);
+          setShadowStatus("Status: " + message, "error");
+        }
+      } catch (error) {
+        setShadowStatus("Status: błąd połączenia", "error");
+      } finally {
+        setTimeout(() => {
+          manualButton.disabled = false;
+        }, 1000);
+        refreshShadowHistory();
+      }
+    });
+
+    refreshShadowHistory();
+    setInterval(refreshShadowHistory, 3000);
   }
 
   function applySwitching(switching) {
@@ -1639,6 +1838,7 @@ body.ui-busy #loading-overlay * {
       setInterval(pollStatus, 2000);
     }
 
+    initShadowControls();
     initWifiControls();
     initZeroTierControls();
   });
@@ -1719,6 +1919,39 @@ def read_shadow_state():
         "run_id": int(payload.get("run_id", 0)),
         "last_error": payload.get("last_error"),
     }
+
+
+def get_shadow_manager_instance():
+    if not CNC_SHADOW_ENABLED:
+        return None
+    try:
+        from shadow.runtime_registry import get_shadow_manager
+    except Exception:
+        return None
+    return get_shadow_manager()
+
+
+def read_shadow_history(limit=20):
+    resolved_limit = max(1, min(int(limit), 100))
+    manager = get_shadow_manager_instance()
+    if manager is not None:
+        try:
+            return manager.get_rebuild_history(resolved_limit)
+        except Exception as exc:
+            app.logger.warning("Nie mozna odczytac historii SHADOW z managera: %s", exc)
+
+    if not os.path.isfile(SHADOW_HISTORY_FILE):
+        return []
+    try:
+        with open(SHADOW_HISTORY_FILE, "r", encoding="utf-8") as history_file:
+            payload = json.load(history_file)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    entries = [entry for entry in payload if isinstance(entry, dict)]
+    entries = list(reversed(entries))
+    return entries[:resolved_limit]
 
 
 def shadow_fsm_group(fsm_state):
@@ -2189,6 +2422,9 @@ def run_mode_script(script_path, mode_label):
 def index():
     upload_dir = get_upload_directory()
     shadow_state = read_shadow_state()
+    shadow_history = []
+    if CNC_SHADOW_ENABLED:
+        shadow_history = read_shadow_history(limit=10)
     shadow_fsm_class = "unknown"
     if shadow_state:
         shadow_fsm_class = shadow_fsm_group(shadow_state.get("fsm_state"))
@@ -2224,6 +2460,7 @@ def index():
         shadow_enabled=CNC_SHADOW_ENABLED,
         shadow_state=shadow_state,
         shadow_fsm_class=shadow_fsm_class,
+        shadow_history=shadow_history,
     )
 
 @app.route("/system")
@@ -2242,6 +2479,7 @@ def system():
         shadow_enabled=CNC_SHADOW_ENABLED,
         shadow_state=None,
         shadow_fsm_class="unknown",
+        shadow_history=[],
     )
 
 @app.route("/net", methods=["POST"])
@@ -2321,6 +2559,33 @@ def api_status():
             "ap_enabled": CNC_AP_ENABLED,
         }
     )
+
+
+@app.route("/api/shadow/history", methods=["GET"])
+def api_shadow_history():
+    if not CNC_SHADOW_ENABLED:
+        return jsonify({"error": "Tryb SHADOW jest wylaczony"}), 409
+    raw_limit = request.args.get("limit", "20")
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 20
+    history = read_shadow_history(limit=limit)
+    return jsonify({"history": history})
+
+
+@app.route("/api/shadow/manual-rebuild", methods=["POST"])
+def api_shadow_manual_rebuild():
+    if not CNC_SHADOW_ENABLED:
+        return jsonify({"error": "Tryb SHADOW jest wylaczony"}), 409
+    manager = get_shadow_manager_instance()
+    if manager is None:
+        return jsonify({"error": "Manager SHADOW nie jest dostepny"}), 503
+    started, message = manager.trigger_manual_rebuild()
+    if not started:
+        return jsonify({"error": message}), 409
+    return jsonify({"ok": True, "message": message})
+
 
 @app.route("/api/restart-gui", methods=["POST"])
 def api_restart_gui():
