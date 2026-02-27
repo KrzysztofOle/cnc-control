@@ -10,7 +10,7 @@ WARN_COUNT=0
 ENV_FILE="/etc/cnc-control/cnc-control.env"
 MIN_USB_IMAGE_SIZE_BYTES=1048576
 
-SECTIONS=("boot" "kernel" "gadget" "usb_image" "project_config" "systemd" "hardware")
+SECTIONS=("boot" "kernel" "gadget" "usb_image" "project_config" "shadow" "systemd" "hardware")
 
 REPORT_STATUS=()
 REPORT_MESSAGE=()
@@ -49,8 +49,9 @@ section_index() {
         gadget) printf '2' ;;
         usb_image) printf '3' ;;
         project_config) printf '4' ;;
-        systemd) printf '5' ;;
-        hardware) printf '6' ;;
+        shadow) printf '5' ;;
+        systemd) printf '6' ;;
+        hardware) printf '7' ;;
         *) printf '%s' "-1" ;;
     esac
 }
@@ -194,6 +195,46 @@ get_env_value() {
             }
         }
     ' "${file_path}"
+}
+
+get_env_value_or_default() {
+    local file_path="$1"
+    local key="$2"
+    local default_value="$3"
+    local value=""
+
+    value="$(get_env_value "${file_path}" "${key}" 2>/dev/null || true)"
+    value="$(trim_string "${value}")"
+    if [ -n "${value}" ]; then
+        printf '%s' "${value}"
+    else
+        printf '%s' "${default_value}"
+    fi
+}
+
+is_true_value() {
+    local raw="$1"
+    local normalized=""
+
+    normalized="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+    case "${normalized}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_shadow_enabled() {
+    local value=""
+
+    if [ ! -f "${ENV_FILE}" ]; then
+        return 1
+    fi
+    value="$(get_env_value "${ENV_FILE}" "CNC_SHADOW_ENABLED" 2>/dev/null || true)"
+    value="$(trim_string "${value}")"
+    if [ -z "${value}" ]; then
+        return 1
+    fi
+    is_true_value "${value}"
 }
 
 file_size_bytes() {
@@ -343,6 +384,11 @@ check_usb_image() {
     local fsck_output=""
     local fsck_rc=0
 
+    if is_shadow_enabled; then
+        add_check "usb_image" "WARN" "PASS" "USB image legacy path" "SHADOW enabled; using CNC_USB_IMG_A/CNC_USB_IMG_B"
+        return
+    fi
+
     if [ ! -f "${ENV_FILE}" ]; then
         add_check "usb_image" "CRITICAL" "FAIL" "USB image path configured" "Missing ${ENV_FILE}"
         return
@@ -409,6 +455,22 @@ check_project_config() {
     fi
     add_check "project_config" "CRITICAL" "PASS" "Project env file present" "${ENV_FILE}"
 
+    if is_shadow_enabled; then
+        value="$(get_env_value_or_default "${ENV_FILE}" "CNC_MASTER_DIR" "/var/lib/cnc-control/master")"
+        value="$(trim_string "${value}")"
+        if [ -n "${value}" ]; then
+            add_check "project_config" "CRITICAL" "PASS" "Config variable CNC_MASTER_DIR" "${value}"
+            if [ -d "${value}" ]; then
+                add_check "project_config" "CRITICAL" "PASS" "Master directory exists" "${value}"
+            else
+                add_check "project_config" "CRITICAL" "FAIL" "Master directory exists" "Missing directory: ${value}"
+            fi
+        else
+            add_check "project_config" "CRITICAL" "FAIL" "Config variable CNC_MASTER_DIR" "Missing or empty in ${ENV_FILE}"
+        fi
+        return
+    fi
+
     value="$(get_env_value "${ENV_FILE}" "CNC_USB_IMG" 2>/dev/null || true)"
     value="$(trim_string "${value}")"
     if [ -n "${value}" ]; then
@@ -436,6 +498,226 @@ check_project_config() {
         fi
     else
         add_check "project_config" "CRITICAL" "FAIL" "Config variable CNC_UPLOAD_DIR" "Missing or empty in ${ENV_FILE}"
+    fi
+}
+
+check_shadow() {
+    local shadow_enabled_raw=""
+    local shadow_state_file=""
+    local shadow_history_file=""
+    local slot_file=""
+    local lock_file=""
+    local master_dir=""
+    local image_a=""
+    local image_b=""
+    local size_bytes=""
+    local active_slot_value=""
+    local state_validation_output=""
+    local state_validation_rc=0
+    local history_validation_output=""
+    local history_validation_rc=0
+
+    if [ ! -f "${ENV_FILE}" ]; then
+        add_check "shadow" "WARN" "WARN" "Shadow checks available" "Missing ${ENV_FILE}"
+        return
+    fi
+
+    shadow_enabled_raw="$(get_env_value "${ENV_FILE}" "CNC_SHADOW_ENABLED" 2>/dev/null || true)"
+    shadow_enabled_raw="$(trim_string "${shadow_enabled_raw}")"
+
+    if ! is_true_value "${shadow_enabled_raw}"; then
+        add_check "shadow" "WARN" "PASS" "Tryb SHADOW wlaczony" "false (pomijam walidacje SHADOW)"
+        return
+    fi
+    add_check "shadow" "CRITICAL" "PASS" "Tryb SHADOW wlaczony" "true"
+
+    master_dir="$(get_env_value_or_default "${ENV_FILE}" "CNC_MASTER_DIR" "/var/lib/cnc-control/master")"
+    if [ -d "${master_dir}" ]; then
+        add_check "shadow" "CRITICAL" "PASS" "Katalog CNC_MASTER_DIR" "${master_dir}"
+    else
+        add_check "shadow" "CRITICAL" "FAIL" "Katalog CNC_MASTER_DIR" "Missing directory: ${master_dir}"
+    fi
+
+    image_a="$(get_env_value_or_default "${ENV_FILE}" "CNC_USB_IMG_A" "/var/lib/cnc-control/cnc_usb_a.img")"
+    image_b="$(get_env_value_or_default "${ENV_FILE}" "CNC_USB_IMG_B" "/var/lib/cnc-control/cnc_usb_b.img")"
+    if [ -f "${image_a}" ]; then
+        add_check "shadow" "CRITICAL" "PASS" "Shadow image slot A exists" "${image_a}"
+        size_bytes="$(file_size_bytes "${image_a}" 2>/dev/null || true)"
+        if [ -n "${size_bytes}" ] && [ "${size_bytes}" -gt "${MIN_USB_IMAGE_SIZE_BYTES}" ]; then
+            add_check "shadow" "CRITICAL" "PASS" "Shadow image slot A size > 1MB" "${size_bytes} bytes"
+        else
+            add_check "shadow" "CRITICAL" "FAIL" "Shadow image slot A size > 1MB" "Current size: ${size_bytes:-unknown}"
+        fi
+    else
+        add_check "shadow" "CRITICAL" "FAIL" "Shadow image slot A exists" "Missing file: ${image_a}"
+    fi
+
+    if [ -f "${image_b}" ]; then
+        add_check "shadow" "CRITICAL" "PASS" "Shadow image slot B exists" "${image_b}"
+        size_bytes="$(file_size_bytes "${image_b}" 2>/dev/null || true)"
+        if [ -n "${size_bytes}" ] && [ "${size_bytes}" -gt "${MIN_USB_IMAGE_SIZE_BYTES}" ]; then
+            add_check "shadow" "CRITICAL" "PASS" "Shadow image slot B size > 1MB" "${size_bytes} bytes"
+        else
+            add_check "shadow" "CRITICAL" "FAIL" "Shadow image slot B size > 1MB" "Current size: ${size_bytes:-unknown}"
+        fi
+    else
+        add_check "shadow" "CRITICAL" "FAIL" "Shadow image slot B exists" "Missing file: ${image_b}"
+    fi
+
+    slot_file="$(get_env_value_or_default "${ENV_FILE}" "CNC_ACTIVE_SLOT_FILE" "/var/lib/cnc-control/shadow_active_slot.state")"
+    if [ -f "${slot_file}" ]; then
+        active_slot_value="$(tr -d '\r\n\t ' < "${slot_file}" 2>/dev/null || true)"
+        active_slot_value="$(printf '%s' "${active_slot_value}" | tr '[:lower:]' '[:upper:]')"
+        if [ "${active_slot_value}" = "A" ] || [ "${active_slot_value}" = "B" ]; then
+            add_check "shadow" "CRITICAL" "PASS" "CNC_ACTIVE_SLOT_FILE valid" "${slot_file}: ${active_slot_value}"
+        else
+            add_check "shadow" "CRITICAL" "FAIL" "CNC_ACTIVE_SLOT_FILE valid" "${slot_file}: invalid value '${active_slot_value}'"
+        fi
+    else
+        add_check "shadow" "CRITICAL" "FAIL" "CNC_ACTIVE_SLOT_FILE valid" "Missing file: ${slot_file}"
+    fi
+
+    shadow_state_file="$(get_env_value_or_default "${ENV_FILE}" "CNC_SHADOW_STATE_FILE" "/var/lib/cnc-control/shadow_state.json")"
+    if [ ! -f "${shadow_state_file}" ]; then
+        add_check "shadow" "CRITICAL" "FAIL" "CNC_SHADOW_STATE_FILE present" "Missing file: ${shadow_state_file}"
+    elif ! command -v python3 >/dev/null 2>&1; then
+        add_check "shadow" "CRITICAL" "FAIL" "CNC_SHADOW_STATE_FILE valid JSON" "Command python3 not available"
+    else
+        state_validation_output="$(python3 - "${shadow_state_file}" "${slot_file}" <<'PY'
+import json
+import sys
+
+state_path = sys.argv[1]
+slot_path = sys.argv[2]
+
+allowed_states = {
+    "IDLE",
+    "CHANGE_DETECTED",
+    "BUILD_SLOT_A",
+    "BUILD_SLOT_B",
+    "EXPORT_STOP",
+    "EXPORT_START",
+    "READY",
+    "ERROR",
+}
+
+with open(state_path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+if not isinstance(payload, dict):
+    raise SystemExit("State file must contain JSON object")
+
+fsm_state = str(payload.get("fsm_state", ""))
+if fsm_state not in allowed_states:
+    raise SystemExit(f"Invalid fsm_state: {fsm_state}")
+
+active_slot = str(payload.get("active_slot", ""))
+if active_slot not in {"A", "B"}:
+    raise SystemExit(f"Invalid active_slot: {active_slot}")
+
+rebuild_slot = payload.get("rebuild_slot")
+if rebuild_slot not in {"A", "B", None}:
+    raise SystemExit(f"Invalid rebuild_slot: {rebuild_slot}")
+
+run_id = payload.get("run_id")
+if not isinstance(run_id, int) or run_id < 0:
+    raise SystemExit(f"Invalid run_id: {run_id}")
+
+rebuild_counter = payload.get("rebuild_counter", run_id)
+if not isinstance(rebuild_counter, int) or rebuild_counter != run_id:
+    raise SystemExit(f"Invalid rebuild_counter: {rebuild_counter} (expected {run_id})")
+
+last_error = payload.get("last_error")
+if last_error is not None and not isinstance(last_error, dict):
+    raise SystemExit("Invalid last_error type")
+if fsm_state == "ERROR" and not isinstance(last_error, dict):
+    raise SystemExit("fsm_state=ERROR requires last_error object")
+
+slot_value = None
+try:
+    with open(slot_path, "r", encoding="utf-8") as slot_handle:
+        slot_value = slot_handle.read().strip().upper()
+except FileNotFoundError:
+    slot_value = None
+
+if slot_value is not None and slot_value in {"A", "B"} and fsm_state in {"IDLE", "READY"}:
+    if active_slot != slot_value:
+        raise SystemExit(
+            f"active_slot mismatch in stable state: state={active_slot}, slot_file={slot_value}, fsm_state={fsm_state}"
+        )
+
+print(f"fsm_state={fsm_state}; active_slot={active_slot}; run_id={run_id}")
+PY
+)"
+        state_validation_rc=$?
+        state_validation_output="$(compact_output "${state_validation_output}")"
+        if [ "${state_validation_rc}" -eq 0 ]; then
+            add_check "shadow" "CRITICAL" "PASS" "CNC_SHADOW_STATE_FILE valid JSON" "${state_validation_output}"
+        else
+            add_check "shadow" "CRITICAL" "FAIL" "CNC_SHADOW_STATE_FILE valid JSON" "${state_validation_output}"
+        fi
+    fi
+
+    lock_file="$(get_env_value_or_default "${ENV_FILE}" "CNC_SHADOW_LOCK_FILE" "/var/run/cnc-shadow.lock")"
+    if [ -f "${lock_file}" ]; then
+        add_check "shadow" "WARN" "PASS" "CNC_SHADOW_LOCK_FILE present" "${lock_file}"
+    else
+        if [ -w "$(dirname "${lock_file}")" ]; then
+            add_check "shadow" "WARN" "WARN" "CNC_SHADOW_LOCK_FILE present" "Lock file not created yet: ${lock_file}"
+        else
+            add_check "shadow" "WARN" "WARN" "CNC_SHADOW_LOCK_FILE present" "No write access to $(dirname "${lock_file}") (fallback /tmp expected)"
+        fi
+    fi
+
+    shadow_history_file="$(get_env_value_or_default "${ENV_FILE}" "CNC_SHADOW_HISTORY_FILE" "/var/lib/cnc-control/shadow_history.json")"
+    if [ ! -f "${shadow_history_file}" ]; then
+        add_check "shadow" "WARN" "WARN" "CNC_SHADOW_HISTORY_FILE present" "Missing file: ${shadow_history_file}"
+    elif ! command -v python3 >/dev/null 2>&1; then
+        add_check "shadow" "WARN" "WARN" "CNC_SHADOW_HISTORY_FILE valid JSON" "Command python3 not available"
+    else
+        history_validation_output="$(python3 - "${shadow_history_file}" <<'PY'
+import json
+import sys
+
+history_path = sys.argv[1]
+with open(history_path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+if not isinstance(payload, list):
+    raise SystemExit("History file must contain JSON array")
+
+for index, entry in enumerate(payload):
+    if not isinstance(entry, dict):
+        raise SystemExit(f"Entry #{index} is not an object")
+    run_id = entry.get("run_id")
+    if run_id is not None and not isinstance(run_id, int):
+        raise SystemExit(f"Entry #{index} has non-integer run_id: {run_id}")
+
+print(f"entries={len(payload)}")
+PY
+)"
+        history_validation_rc=$?
+        history_validation_output="$(compact_output "${history_validation_output}")"
+        if [ "${history_validation_rc}" -eq 0 ]; then
+            add_check "shadow" "WARN" "PASS" "CNC_SHADOW_HISTORY_FILE valid JSON" "${history_validation_output}"
+        else
+            add_check "shadow" "WARN" "WARN" "CNC_SHADOW_HISTORY_FILE valid JSON" "${history_validation_output}"
+        fi
+    fi
+
+    if command -v inotifywait >/dev/null 2>&1; then
+        add_check "shadow" "CRITICAL" "PASS" "Dependency inotifywait" "available"
+    else
+        add_check "shadow" "CRITICAL" "FAIL" "Dependency inotifywait" "command not found"
+    fi
+    if command -v mkfs.vfat >/dev/null 2>&1; then
+        add_check "shadow" "CRITICAL" "PASS" "Dependency mkfs.vfat" "available"
+    else
+        add_check "shadow" "CRITICAL" "FAIL" "Dependency mkfs.vfat" "command not found"
+    fi
+    if command -v mcopy >/dev/null 2>&1; then
+        add_check "shadow" "CRITICAL" "PASS" "Dependency mcopy" "available"
+    else
+        add_check "shadow" "CRITICAL" "FAIL" "Dependency mcopy" "command not found"
     fi
 }
 
@@ -468,6 +750,7 @@ check_systemd() {
     fi
     check_systemd_service "cnc-usb.service"
     check_systemd_service "cnc-webui.service"
+    check_systemd_service "cnc-led.service"
 }
 
 check_hardware() {
@@ -610,6 +893,7 @@ main() {
     check_gadget
     check_usb_image
     check_project_config
+    check_shadow
     check_systemd
     check_hardware
 
