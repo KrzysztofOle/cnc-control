@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ class UsbManager:
         return cls(timeouts=UsbTimeouts(stop_timeout=stop_timeout, start_timeout=start_timeout))
 
     def stop_export(self) -> bool:
-        result = self._run_root_command(["modprobe", "-r", "g_mass_storage"])
+        result = self._run_root_command([self._resolve_binary("modprobe"), "-r", "g_mass_storage"])
         if result.returncode != 0:
             return False
         return self._wait_for_module_state(expect_loaded=False, timeout_seconds=self._timeouts.stop_timeout)
@@ -31,7 +32,7 @@ class UsbManager:
         if not active_slot_path:
             return False
         result = self._run_root_command(
-            ["modprobe", "g_mass_storage", f"file={active_slot_path}", "ro=1"]
+            [self._resolve_binary("modprobe"), "g_mass_storage", f"file={active_slot_path}", "ro=1"]
         )
         if result.returncode != 0:
             return False
@@ -48,7 +49,7 @@ class UsbManager:
     @staticmethod
     def _is_mass_storage_loaded() -> bool:
         result = subprocess.run(
-            ["lsmod"],
+            [UsbManager._resolve_binary("lsmod")],
             capture_output=True,
             text=True,
             check=False,
@@ -71,3 +72,14 @@ class UsbManager:
             text=True,
             check=False,
         )
+
+    @staticmethod
+    def _resolve_binary(binary_name: str) -> str:
+        resolved = shutil.which(binary_name)
+        if resolved:
+            return resolved
+        for prefix in ("/usr/sbin", "/sbin", "/usr/bin", "/bin"):
+            candidate = os.path.join(prefix, binary_name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return binary_name

@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Mapping
@@ -37,16 +38,23 @@ class RebuildEngine:
 
         try:
             self._run_command(
-                ["truncate", "-s", f"{self._config.slot_size_mb}M", tmp_path],
+                [self._resolve_binary("truncate"), "-s", f"{self._config.slot_size_mb}M", tmp_path],
                 "Nie udalo sie utworzyc obrazu tymczasowego.",
             )
             self._run_command(
-                ["mkfs.vfat", "-F", "32", tmp_path],
+                [self._resolve_binary("mkfs.vfat"), "-F", "32", tmp_path],
                 "Nie udalo sie sformatowac obrazu FAT.",
             )
             if self._master_has_content():
                 self._run_command(
-                    ["mcopy", "-s", "-i", tmp_path, f"{self._config.master_dir}/", "::"],
+                    [
+                        self._resolve_binary("mcopy"),
+                        "-s",
+                        "-i",
+                        tmp_path,
+                        f"{self._config.master_dir}/",
+                        "::",
+                    ],
                     "Nie udalo sie skopiowac danych do obrazu FAT.",
                 )
 
@@ -104,6 +112,17 @@ class RebuildEngine:
             os.remove(tmp_path)
         except FileNotFoundError:
             return
+
+    @staticmethod
+    def _resolve_binary(binary_name: str) -> str:
+        resolved = shutil.which(binary_name)
+        if resolved:
+            return resolved
+        for prefix in ("/usr/sbin", "/sbin", "/usr/bin", "/bin"):
+            candidate = os.path.join(prefix, binary_name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return binary_name
 
     @property
     def master_dir(self) -> str:
