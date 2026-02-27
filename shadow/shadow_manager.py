@@ -1,5 +1,7 @@
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 from typing import Mapping, Optional
@@ -13,6 +15,17 @@ from shadow.watcher_service import WatcherService
 
 
 class ShadowManager:
+    _LED_MODE_BY_STATE = {
+        "IDLE": "UPLOAD",
+        "READY": "UPLOAD",
+        "CHANGE_DETECTED": "USB",
+        "BUILD_SLOT_A": "USB",
+        "BUILD_SLOT_B": "USB",
+        "EXPORT_STOP": "USB",
+        "EXPORT_START": "USB",
+        "ERROR": "ERROR",
+    }
+
     def __init__(
         self,
         state_store: StateStore,
@@ -32,6 +45,7 @@ class ShadowManager:
         self._debounce_seconds = max(0, debounce_seconds)
         self._logger = logging.getLogger(__name__)
         self._worker: Optional[threading.Thread] = None
+        self._last_led_mode: Optional[str] = None
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "ShadowManager":
@@ -51,6 +65,7 @@ class ShadowManager:
         state = self._state_store.load_or_initialize()
         active_slot = self._slot_manager.read_active_slot()
         state = self._normalize_state(state, active_slot)
+        self._apply_led_for_state(state.fsm_state)
         try:
             self._watcher_service.start()
         except Exception as exc:
@@ -124,12 +139,12 @@ class ShadowManager:
         state.active_slot = active_slot
         state.rebuild_slot = rebuild_slot
         state.last_error = None
-        self._state_store.save(state)
+        self._save_state(state)
 
         state.fsm_state = "BUILD_SLOT_A" if rebuild_slot == "A" else "BUILD_SLOT_B"
         state.run_id += 1
         state.rebuild_counter = state.run_id
-        self._state_store.save(state)
+        self._save_state(state)
         self._logger.info(
             "SHADOW rebuild start: run_id=%s active_slot=%s rebuild_slot=%s",
             state.run_id,
@@ -140,12 +155,12 @@ class ShadowManager:
         self._rebuild_engine.full_rebuild(rebuild_path)
 
         state.fsm_state = "EXPORT_STOP"
-        self._state_store.save(state)
+        self._save_state(state)
         if not self._usb_manager.stop_export():
             raise RuntimeError("Nie udalo sie zatrzymac eksportu USB.")
 
         state.fsm_state = "EXPORT_START"
-        self._state_store.save(state)
+        self._save_state(state)
         if not self._usb_manager.start_export(rebuild_path):
             raise RuntimeError("Nie udalo sie uruchomic eksportu USB.")
 
@@ -153,7 +168,7 @@ class ShadowManager:
         state.active_slot = rebuild_slot
         state.rebuild_slot = None
         state.fsm_state = "READY"
-        self._state_store.save(state)
+        self._save_state(state)
         self._logger.info(
             "SHADOW rebuild koniec: run_id=%s active_slot=%s",
             state.run_id,
@@ -166,7 +181,7 @@ class ShadowManager:
         state.active_slot = active_slot
         state.rebuild_slot = None
         state.fsm_state = "IDLE"
-        self._state_store.save(state)
+        self._save_state(state)
         return state
 
     def _set_error(self, code: str, message: str) -> None:
@@ -174,7 +189,7 @@ class ShadowManager:
         state.fsm_state = "ERROR"
         state.rebuild_slot = None
         state.last_error = {"code": code, "message": message}
-        self._state_store.save(state)
+        self._save_state(state)
 
     def _ensure_master_directory(self) -> None:
         os.makedirs(self._rebuild_engine.master_dir, exist_ok=True)
@@ -191,3 +206,49 @@ class ShadowManager:
         if "uruchomic eksportu usb" in message:
             return "ERR_USB_START_TIMEOUT"
         return "ERR_REBUILD_TIMEOUT"
+
+    def _save_state(self, state: ShadowState) -> None:
+        self._state_store.save(state)
+        self._apply_led_for_state(state.fsm_state)
+
+    def _apply_led_for_state(self, fsm_state: str) -> None:
+        led_mode = self._LED_MODE_BY_STATE.get(fsm_state)
+        if not led_mode or led_mode == self._last_led_mode:
+            return
+        if self._set_led_mode(led_mode):
+            self._last_led_mode = led_mode
+
+    def _set_led_mode(self, mode_name: str) -> bool:
+        commands = []
+        if sys.executable:
+            commands.append([sys.executable, "-m", "led_status_cli", mode_name])
+        commands.extend(
+            [
+                ["python3", "-m", "led_status_cli", mode_name],
+                ["python", "-m", "led_status_cli", mode_name],
+            ]
+        )
+
+        seen = set()
+        for command in commands:
+            key = tuple(command)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                self._logger.warning("SHADOW LED set failed (%s): %s", mode_name, exc)
+                continue
+            if result.returncode == 0:
+                return True
+        self._logger.warning("SHADOW LED mode not applied: %s", mode_name)
+        return False

@@ -85,6 +85,7 @@ AP_BLOCK_FLAG = os.environ.get(
     "/dev/shm/cnc-ap-blocked.flag",
 )
 CNC_AP_ENABLED = parse_env_bool(os.environ.get("CNC_AP_ENABLED"), default=False)
+CNC_SHADOW_ENABLED = parse_env_bool(os.environ.get("CNC_SHADOW_ENABLED"), default=False)
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     REPO_ROOT,
@@ -162,11 +163,15 @@ def _set_led_mode(mode_name):
 if hasattr(app, "before_serving"):
     @app.before_serving
     def set_led_idle_before_serving():
+        if CNC_SHADOW_ENABLED:
+            return
         _set_led_mode("IDLE")
 else:
     @app.before_request
     def set_led_idle_before_first_request():
         global _LED_IDLE_SET
+        if CNC_SHADOW_ENABLED:
+            return
         if _LED_IDLE_SET:
             return
         _set_led_mode("IDLE")
