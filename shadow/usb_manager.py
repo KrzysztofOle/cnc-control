@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -21,12 +22,7 @@ class UsbManager:
         return cls(timeouts=UsbTimeouts(stop_timeout=stop_timeout, start_timeout=start_timeout))
 
     def stop_export(self) -> bool:
-        result = subprocess.run(
-            ["modprobe", "-r", "g_mass_storage"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = self._run_root_command(["modprobe", "-r", "g_mass_storage"])
         if result.returncode != 0:
             return False
         return self._wait_for_module_state(expect_loaded=False, timeout_seconds=self._timeouts.stop_timeout)
@@ -34,11 +30,8 @@ class UsbManager:
     def start_export(self, active_slot_path: str) -> bool:
         if not active_slot_path:
             return False
-        result = subprocess.run(
-            ["modprobe", "g_mass_storage", f"file={active_slot_path}", "ro=1"],
-            capture_output=True,
-            text=True,
-            check=False,
+        result = self._run_root_command(
+            ["modprobe", "g_mass_storage", f"file={active_slot_path}", "ro=1"]
         )
         if result.returncode != 0:
             return False
@@ -66,3 +59,15 @@ class UsbManager:
             if line.split() and line.split()[0] == "g_mass_storage":
                 return True
         return False
+
+    @staticmethod
+    def _run_root_command(command):
+        effective_command = list(command)
+        if os.geteuid() != 0:
+            effective_command = ["sudo", "-n", *effective_command]
+        return subprocess.run(
+            effective_command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )

@@ -104,3 +104,7 @@ class RebuildEngine:
             os.remove(tmp_path)
         except FileNotFoundError:
             return
+
+    @property
+    def master_dir(self) -> str:
+        return self._config.master_dir

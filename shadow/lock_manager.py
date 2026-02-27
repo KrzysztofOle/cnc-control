@@ -1,5 +1,6 @@
 import fcntl
 import os
+import tempfile
 from contextlib import contextmanager
 from typing import Iterator, Mapping
 
@@ -18,10 +19,16 @@ class LockManager:
         if self._fd is not None:
             return True
 
-        directory = os.path.dirname(self._lock_file) or "."
-        os.makedirs(directory, exist_ok=True)
-
-        self._fd = open(self._lock_file, "a+", encoding="utf-8")
+        lock_path = self._lock_file
+        try:
+            self._fd = self._open_lock_file(lock_path)
+        except PermissionError:
+            fallback_path = os.path.join(
+                tempfile.gettempdir(),
+                os.path.basename(self._lock_file) or "cnc-shadow.lock",
+            )
+            self._fd = self._open_lock_file(fallback_path)
+            self._lock_file = fallback_path
         flags = fcntl.LOCK_EX
         if not blocking:
             flags |= fcntl.LOCK_NB
@@ -33,6 +40,12 @@ class LockManager:
             self._fd.close()
             self._fd = None
             return False
+
+    @staticmethod
+    def _open_lock_file(path: str):
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        return open(path, "a+", encoding="utf-8")
 
     def release(self) -> None:
         if self._fd is None:

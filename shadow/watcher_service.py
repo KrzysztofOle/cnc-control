@@ -1,3 +1,4 @@
+import os
 import select
 import subprocess
 from typing import Mapping, Optional
@@ -16,6 +17,7 @@ class WatcherService:
     def start(self) -> None:
         if self._process is not None:
             return
+        os.makedirs(self._watched_dir, exist_ok=True)
         self._process = subprocess.Popen(
             [
                 "inotifywait",
@@ -23,6 +25,8 @@ class WatcherService:
                 "-r",
                 "-e",
                 "close_write,create,delete,move",
+                "--format",
+                "%w%f:%e",
                 self._watched_dir,
             ],
             stdout=subprocess.PIPE,
@@ -49,3 +53,7 @@ class WatcherService:
         if not line:
             return None
         return line.strip()
+
+    @property
+    def watched_dir(self) -> str:
+        return self._watched_dir
