@@ -13,7 +13,8 @@ a projekt stosuje [SemVer](https://semver.org/lang/pl/).
 
 ### Changed
 
-- Brak zmian.
+- Wersjonowanie pakietu Python przeniesiono na `setuptools-scm` (wersja wyznaczana z tagów Git).
+- Usunięto plik `VERSION` jako redundantne źródło wersji.
 
 ### Fixed
 

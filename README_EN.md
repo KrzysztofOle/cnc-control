@@ -125,6 +125,8 @@ Detailed runtime parameters are documented directly in the source code.
 ## 🧾 Versioning
 
 Rule: **Git tag = application version**. Use **annotated tags**.
+The Python package version is derived automatically from Git tags via `setuptools-scm` (configured in `pyproject.toml`).
+The `VERSION` file is not used.
 
 Example:
 

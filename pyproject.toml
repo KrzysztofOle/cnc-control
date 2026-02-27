@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cnc-control"
-version = "0.3.0"
+dynamic = ["version"]
 description = "CNC helper utilities for Raspberry Pi and RichAuto A11/A11E"
 readme = "README_EN.md"
 requires-python = ">=3.9"
@@ -20,3 +20,8 @@ rpi = [
 
 [tool.setuptools]
 py-modules = ["led_status", "led_status_cli"]
+
+[tool.setuptools_scm]
+tag_regex = "^(?:v)?(?P<version>\\d+\\.\\d+\\.\\d+)$"
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"

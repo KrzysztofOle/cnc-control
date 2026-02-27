@@ -120,6 +120,8 @@ python main.py
 ## 🧾 Wersjonowanie
 
 Zasada: **tag Git = wersja aplikacji**. Używaj **annotated tags**.
+Wersja pakietu Python jest wyznaczana automatycznie z tagów Git przez `setuptools-scm` (konfiguracja w `pyproject.toml`).
+Plik `VERSION` nie jest używany.
 
 Przykład:
 
