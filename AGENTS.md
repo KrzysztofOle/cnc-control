@@ -135,6 +135,112 @@ Model ten zapewnia:
 
 ---
 
+## 🧪 Tryb CI – Automatyczny operator wdrożeniowy
+
+W projekcie obowiązuje deterministyczna sekwencja działań wdrożeniowych.
+CODEX działa jak uproszczony operator CI (Continuous Integration).
+
+---
+
+### 1️⃣ Faza DEV (lokalna)
+
+Warunki wstępne:
+
+- Kod zmodyfikowany lokalnie.
+- Testy jednostkowe (pytest) przechodzą bez błędów.
+- Brak błędów składni (`python -m py_compile` lub równoważne).
+
+Dopiero po spełnieniu powyższych warunków możliwy jest commit.
+
+---
+
+### 2️⃣ Commit i push (repozytorium)
+
+Sekwencja obowiązkowa:
+
+git add .
+git commit -m "" -m ""
+git push
+
+Zabronione:
+- commit bez testów,
+- bezpośrednia edycja plików na Raspberry Pi bez wcześniejszego push.
+
+---
+
+### 3️⃣ Faza TEST (Raspberry Pi)
+
+Po wypchnięciu zmian:
+
+CODEX łączy się z jednym z testowych Raspberry Pi:
+
+- `ssh cnc@192.168.7.139`
+- `ssh andrzej@192.168.7.110`
+
+Następnie wykonuje sekwencję:
+
+cd ~/cnc-control
+git pull -ff-only
+source .venv/bin/activate
+pip install -editable ".[rpi]"
+cnc_selftest -json
+
+Dodatkowo sprawdza:
+
+systemctl is-active cnc-webui
+systemctl is-active cnc-usb
+systemctl is-active cnc-led
+
+---
+
+### 4️⃣ Warunki sukcesu wdrożenia
+
+Wdrożenie uznaje się za poprawne, gdy:
+
+- `git pull` kończy się bez konfliktów,
+- `cnc_selftest` zwraca exit code 0,
+- wszystkie wymagane usługi systemd mają stan `active`,
+- brak ERROR w `journalctl -p 3 -n 20`.
+
+---
+
+### 5️⃣ Warunki niepowodzenia
+
+Za błąd wdrożenia uznaje się:
+
+- konflikt merge,
+- niezerowy exit code selftest,
+- usługa systemd w stanie `failed`,
+- wyjątek Python podczas startu WebUI.
+
+W przypadku błędu:
+
+- nie wykonuj dalszych testów funkcjonalnych,
+- zgłoś błąd i opisz logi,
+- nie kontynuuj wdrożenia na innych urządzeniach.
+
+---
+
+### 6️⃣ Zasada integralności środowiska
+
+Raspberry Pi nie jest środowiskiem developerskim.
+
+Zabronione:
+
+- ręczne poprawki kodu bez commit,
+- zmiany bez odzwierciedlenia w repo,
+- instalacje zależności poza `.venv`.
+
+---
+
+Model CI zapewnia:
+
+- powtarzalność wdrożeń,
+- kontrolę jakości,
+- minimalizację ryzyka dla maszyny CNC.
+
+---
+
 ## ⚠️ Bezpieczeństwo
 
 Projekt dotyczy pracy z rzeczywistą maszyną CNC.
