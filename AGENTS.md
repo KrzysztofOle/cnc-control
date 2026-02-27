@@ -12,6 +12,7 @@ Plik **AGENTS.md jest prowadzony wyłącznie w języku polskim** i stanowi źró
 Projekt dotyczy systemu wspomagającego obsługę frezarki CNC ze sterownikiem **RichAuto A11 / A11E**, z wykorzystaniem **Raspberry Pi** jako komputera pomocniczego.
 
 Zakres projektu:
+
 - obsługa i transfer plików G-code,
 - automatyzacja czynności pomocniczych,
 - integracja sieciowa i USB,
@@ -55,10 +56,12 @@ Zakres projektu:
    - najpierw **PL**,
    - następnie **EN**.
 4. Przykład:
+
    ```python
    # PL: Inicjalizacja połączenia USB
    # EN: Initialize USB connection
    ```
+
 5. Nie usuwaj istniejących komentarzy bez uzasadnienia.
 6. Przestrzegaj standardu **PEP 8**.
 
@@ -80,11 +83,64 @@ Zakres projektu:
 
 ---
 
+## 🔁 Metodyka pracy developerskiej i wdrożeniowej
+
+Projekt stosuje rozdzielony model pracy:
+
+### 1️⃣ Środowisko developerskie (lokalne)
+
+- Kod jest modyfikowany i analizowany na maszynie developerskiej (PC / Mac).
+- Maszyna developerska **nie jest docelowym Raspberry Pi**.
+- Zmiany są weryfikowane lokalnie (analiza kodu, testy jednostkowe, przegląd logiki).
+
+### 2️⃣ Commit i push
+
+Po pozytywnej weryfikacji:
+
+- CODEX wykonuje:
+  - `git add`
+  - `git commit`
+  - `git push`
+- Opis commitu musi być zgodny z zasadami określonymi w AGENTS.md.
+
+### 3️⃣ Aktualizacja środowiska testowego (Raspberry Pi)
+
+Po wypchnięciu zmian na serwer:
+
+CODEX łączy się przez SSH z jednym z testowych Raspberry Pi:
+
+- `ssh cnc@192.168.7.139`
+- `ssh andrzej@192.168.7.110`
+
+Następnie:
+
+- przechodzi do katalogu repozytorium `cnc-control`,
+- wykonuje `git pull`,
+- aktualizuje środowisko (jeśli wymagane),
+- uruchamia odpowiednie skrypty (`usb_mode.sh`, `net_mode.sh`, `status.sh`),
+- przeprowadza testy diagnostyczne,
+- weryfikuje konfigurację systemową oraz usługi systemd.
+
+### 4️⃣ Zasada bezpieczeństwa
+
+- Testy wykonuj najpierw w trybie bezpiecznym.
+- Nie przeprowadzaj testów przy aktywnym procesie obróbki.
+- Zakładaj możliwość niepoprawnej konfiguracji Raspberry Pi.
+
+Model ten zapewnia:
+
+- oddzielenie warstwy rozwoju od warstwy sprzętowej,
+- powtarzalność wdrożeń,
+- minimalizację ryzyka uszkodzenia maszyny CNC.
+
+---
+
 ## ⚠️ Bezpieczeństwo
 
 Projekt dotyczy pracy z rzeczywistą maszyną CNC.
 
 Zawsze:
+
 - zapewnij dostęp do **E-STOP**,
 - testuj zmiany bez narzędzia skrawającego,
 - zakładaj możliwość awarii systemu wspomagającego.
@@ -94,5 +150,6 @@ Zawsze:
 ## 🧭 Zasada nadrzędna
 
 W przypadku konfliktu zasad:
+
 - **AGENTS.md ma najwyższy priorytet**,
 - wszelkie wątpliwości zgłaszaj przed wprowadzeniem zmian.
