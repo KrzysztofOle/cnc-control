@@ -129,20 +129,32 @@ Sekwencja aktualizacji aktywnego slotu:
 ## Inicjalizacja przy starcie systemu
 
 Wymagania cold start:
-- brak `CNC_ACTIVE_SLOT_FILE` wymusza:
-  - utworzenie `CNC_USB_IMG_A` i `CNC_USB_IMG_B`,
-  - full rebuild na slocie `A`,
-  - zapis `CNC_ACTIVE_SLOT=A`,
-  - publikację slotu `A`.
-- brak jednego slotu wymusza odbudowę brakującego slotu full rebuildem,
-- obecność obu slotów i `dry_run_diff=1` wymusza rebuild na slocie nieaktywnym,
-- niespójność krytyczna stanu slotów wymusza full rebuild obu slotów.
+- kolejność operacji jest obowiązkowa i deterministyczna,
+- przed oceną stanu slotów usuwane są wszystkie pliki tymczasowe slotów.
 
-Kontrole spójności przy starcie:
-- weryfikacja, że `CNC_ACTIVE_SLOT_FILE` wskazuje istniejący plik obrazu,
-- jeśli `ACTIVE_SLOT` istnieje i przechodzi walidację integralności, system używa go jako aktywnego eksportu,
-- drugi slot jest traktowany jako `REBUILD_SLOT` bez porównywania hashy i bez porównywania pełnej zawartości obu slotów,
-- brak poprawnego pliku aktywnego slotu wymusza full rebuild obu slotów.
+Algorytm cold start:
+1. usunąć wszystkie pliki tymczasowe slotów (`*.tmp`),
+2. sprawdzić istnienie `CNC_ACTIVE_SLOT_FILE`,
+3. jeśli brak `CNC_ACTIVE_SLOT_FILE`:
+   - utworzyć `CNC_USB_IMG_A` i `CNC_USB_IMG_B`,
+   - wykonać full rebuild slotu `A`,
+   - ustawić `ACTIVE_SLOT=A`,
+   - przejść do `EXPORT_START`,
+4. jeśli `CNC_ACTIVE_SLOT_FILE` istnieje:
+   - zwalidować wskazany slot przez mount `ro`,
+   - jeśli walidacja zakończy się sukcesem, użyć wskazanego slotu jako `ACTIVE_SLOT`,
+   - jeśli walidacja zakończy się niepowodzeniem:
+     - sprawdzić slot przeciwny przez mount `ro`,
+     - jeśli slot przeciwny przejdzie walidację, wykonać fallback i zapisać `CNC_ACTIVE_SLOT_FILE` atomowo,
+     - jeśli slot przeciwny nie przejdzie walidacji, przejść do `ERROR`,
+5. wykonać porównanie dry-run:
+   - `REBUILD_SLOT` jest slotem przeciwnym do `ACTIVE_SLOT`,
+   - `rsync -a --delete --dry-run ${CNC_MASTER_DIR}/ -> ${REBUILD_SLOT_MOUNT}/`,
+6. ustawić FSM zgodnie z wynikiem `dry_run_diff`:
+   - `dry_run_diff=0` -> `READY`,
+   - `dry_run_diff=1` -> `CHANGE_DETECTED`.
+
+Kolejność powyższa jest obowiązkowa i deterministyczna.
 
 ## Definicja niespójności krytycznej
 
@@ -541,8 +553,12 @@ Wymagania:
 - wyjście z `ERROR` wymaga `manual_rebuild`,
 - `status.sh` raportuje ostatni `RUN_ID` i kod błędu,
 - WebUI wyświetla stan `ERROR` jednoznacznie.
-- zdarzenia `upload_detected` w stanie `ERROR` są ignorowane logicznie przez FSM i nie powodują przejścia stanu,
-- zdarzenie `upload_detected` w stanie `ERROR` może wyłącznie ustawić `rebuild_pending=1`.
+- przejście do `ERROR` zeruje `rebuild_pending`,
+- zdarzenie `upload_detected` w stanie `ERROR` może ustawić `rebuild_pending=1`,
+- `rebuild_pending` w stanie `ERROR` nie powoduje automatycznego przejścia FSM,
+- `rebuild_pending` w stanie `ERROR` jest brane pod uwagę dopiero po wywołaniu `manual_rebuild`,
+- `manual_rebuild` rozpoczyna nowy przebieg niezależnie od wartości `rebuild_pending`,
+- "W stanie ERROR flaga rebuild_pending nie wpływa na FSM do czasu wywołania manual_rebuild."
 
 ## Zachowanie flag przy przejściu do ERROR
 
@@ -552,6 +568,7 @@ Wymagania:
 - `CNC_ACTIVE_SLOT_FILE` nie jest modyfikowany przy wejściu do `ERROR`,
 - `RUN_ID` pozostaje wartością ostatniego przebiegu,
 - `manual_rebuild` czyści `last_error` przed rozpoczęciem nowego przebiegu,
+- `manual_rebuild` uruchamia przebieg rebuild niezależnie od wartości `rebuild_pending`,
 - automatyczny reset `ERROR` jest zabroniony.
 
 ## Specyfikacja strategii rebuild
@@ -694,9 +711,12 @@ Wymagania:
 
 Wymagania:
 - każdy rebuild posiada `RUN_ID`,
-- `RUN_ID` jest monotonicznym licznikiem całkowitym,
+- `RUN_ID` jest 64-bitową liczbą całkowitą bez znaku (`uint64`),
+- zakres `RUN_ID` wynosi `0..18446744073709551615`,
 - `RUN_ID` jest przechowywany w `CNC_SHADOW_STATE_FILE`,
-- `RUN_ID` jest inkrementowany przy wejściu do `BUILD_SLOT_A` albo `BUILD_SLOT_B`,
+- `RUN_ID` jest inkrementowany dokładnie o `1` przy wejściu do `BUILD_SLOT_A` albo `BUILD_SLOT_B`,
+- overflow `RUN_ID` jest zabroniony,
+- osiągnięcie `RUN_ID=18446744073709551615` i próba inkrementacji wymusza przejście do `ERROR` z kodem `ERR_RUN_ID_OVERFLOW`,
 - `RUN_ID` nie jest resetowany przy restarcie usługi,
 - `RUN_ID` jest zapisywany w logach i w `CNC_SHADOW_STATE_FILE`,
 - `rebuild_counter` jest aliasem `RUN_ID`,
@@ -711,6 +731,7 @@ Dozwolony katalog kodów błędów:
 - `ERR_FAT_INVALID`,
 - `ERR_REBUILD_TIMEOUT`,
 - `ERR_TOO_MANY_FILES`,
+- `ERR_RUN_ID_OVERFLOW`,
 - `ERR_CONFIG_VERSION`,
 - `ERR_MISSING_DEPENDENCY`,
 - `ERR_LOCK_CONFLICT`.
