@@ -2658,5 +2658,13 @@ def download_startup_log():
     except Exception:
         return redirect_to_next("Błąd pobierania logu startowego")
 
-if __name__ == "__main__":
+def start_net_usb():
     app.run(host="0.0.0.0", port=8080)
+
+
+if __name__ == "__main__":
+    if REPO_ROOT not in sys.path:
+        sys.path.insert(0, REPO_ROOT)
+    from mode_selector import ModeSelector
+
+    ModeSelector().start()
