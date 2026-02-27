@@ -83,6 +83,7 @@ Wymagania zapisu:
 Wymagania odczytu:
 - `status.sh`, WebUI i CLI odczytują stan wyłącznie z `CNC_SHADOW_STATE_FILE`,
 - brak `CNC_SHADOW_STATE_FILE` wymusza inicjalizację FSM w `IDLE` i utworzenie pliku stanu.
+- `rebuild_pending` nie jest utrwalane w `CNC_SHADOW_STATE_FILE`.
 
 ## Wersjonowanie konfiguracji SHADOW
 
@@ -134,7 +135,7 @@ Wymagania cold start:
   - zapis `CNC_ACTIVE_SLOT=A`,
   - publikację slotu `A`.
 - brak jednego slotu wymusza odbudowę brakującego slotu full rebuildem,
-- obecność obu slotów i nowszy stan `CNC_MASTER_DIR` wymusza rebuild na slocie nieaktywnym,
+- obecność obu slotów i `dry_run_diff=1` wymusza rebuild na slocie nieaktywnym,
 - niespójność krytyczna stanu slotów wymusza full rebuild obu slotów.
 
 Kontrole spójności przy starcie:
@@ -172,6 +173,12 @@ Reguły porównania:
 - przy `CNC_SHADOW_INCREMENTAL=false` uruchomiony rebuild jest zawsze wykonywany jako full rebuild,
 - przy `CNC_SHADOW_INCREMENTAL=false` system nie wykonuje rsync incremental i nie montuje slotu w `loop,rw`.
 
+Formalna definicja "nowszego stanu `CNC_MASTER_DIR`":
+- "nowszy stan" występuje wyłącznie, gdy wynik:
+  - `rsync -a --delete --dry-run ${CNC_MASTER_DIR}/ -> ${REBUILD_SLOT_MOUNT}/`
+  - wykazuje różnice, czyli `dry_run_diff=1`,
+- timestamp katalogu `CNC_MASTER_DIR` nie jest kryterium decyzji.
+
 ## Model watchera inotify
 
 Wymagania:
@@ -183,9 +190,14 @@ Wymagania:
 ## Weryfikacja przestrzeni dyskowej
 
 Wymagania:
-- przed każdym rebuild wykonywana jest kontrola wolnej przestrzeni,
+- kontrola przestrzeni jest wykonywana po uzyskaniu locka rebuild,
+- kontrola przestrzeni dotyczy filesystemu, na którym znajdują się obrazy slotów,
+- weryfikowana jest wartość dostępnej przestrzeni (`available_space`),
+- jednostką porównania są bajty,
+- `SLOT_SIZE_BYTES = CNC_SHADOW_SLOT_SIZE_MB * 1024 * 1024`,
 - minimalna przestrzeń wymagana:
-  - `2 x CNC_SHADOW_SLOT_SIZE_MB + 10%`,
+  - `available_space_bytes >= (2 * SLOT_SIZE_BYTES + 10% * SLOT_SIZE_BYTES)`,
+- obliczenie nie uwzględnia plików tymczasowych, które jeszcze nie istnieją,
 - niespełnienie progu przestrzeni wymusza `rebuild_error`,
 - `rebuild_error` z braku przestrzeni blokuje przejście do `EXPORT_STOP`.
 
@@ -193,7 +205,14 @@ Wymagania:
 
 Wymagania:
 - obowiązuje limit liczby plików `CNC_SHADOW_MAX_FILES`,
-- przekroczenie limitu wymusza `rebuild_error`,
+- liczba plików jest liczona wyłącznie w `CNC_MASTER_DIR`,
+- liczenie jest wykonywane przed rozpoczęciem rebuild,
+- licznik obejmuje wyłącznie pliki regularne,
+- przekroczenie limitu:
+  - ustawia `last_error.code=ERR_TOO_MANY_FILES`,
+  - blokuje rebuild,
+  - nie wykonuje `EXPORT_STOP`,
+  - przechodzi do `ERROR`,
 - limit chroni Raspberry Pi Zero W przed degradacją wydajności podczas skanowania i synchronizacji.
 
 ## Ograniczenia trwałości nośnika
@@ -320,6 +339,9 @@ Wymagania:
 - mechanizm lock: `flock`,
 - WebUI odrzuca rebuild przy aktywnym locku,
 - lock jest utrzymywany od wejścia do `BUILD_SLOT_*` do końca `EXPORT_START`.
+- przy starcie usługi `rebuild_pending=0`,
+- `rebuild_pending` jest wyłącznie flagą runtime.
+- przy starcie usługi poprzednia wartość `rebuild_pending` jest ignorowana.
 
 Kolejkowanie zmian:
 - `upload_detected` podczas `BUILD_SLOT_*` ustawia `rebuild_pending=1`,
@@ -401,6 +423,29 @@ Wymagania:
 - automatyczny retry jest zabroniony,
 - przejście do `ERROR` jest deterministyczne.
 
+Mapowanie timeoutów i skutków:
+- przekroczenie `CNC_SHADOW_USB_STOP_TIMEOUT`:
+  - ustawia `last_error.code=ERR_USB_STOP_TIMEOUT`,
+  - ustawia `last_error.message`,
+  - przełącza FSM do `ERROR`,
+  - zwalnia lock rebuild,
+  - nie aktualizuje `CNC_ACTIVE_SLOT_FILE`,
+  - nie wykonuje retry,
+- przekroczenie `CNC_SHADOW_USB_START_TIMEOUT`:
+  - ustawia `last_error.code=ERR_USB_START_TIMEOUT`,
+  - ustawia `last_error.message`,
+  - przełącza FSM do `ERROR`,
+  - zwalnia lock rebuild,
+  - nie aktualizuje `CNC_ACTIVE_SLOT_FILE`,
+  - nie wykonuje retry,
+- przekroczenie `CNC_SHADOW_MAX_REBUILD_TIME`:
+  - ustawia `last_error.code=ERR_REBUILD_TIMEOUT`,
+  - ustawia `last_error.message`,
+  - przełącza FSM do `ERROR`,
+  - zwalnia lock rebuild,
+  - nie aktualizuje `CNC_ACTIVE_SLOT_FILE`,
+  - nie wykonuje retry.
+
 ## Tryb maintenance
 
 Wymagania:
@@ -417,9 +462,9 @@ Wymagania:
 stateDiagram-v2
     [*] --> IDLE
 
-    IDLE --> CHANGE_DETECTED: upload_detected
+    IDLE --> READY: startup_evaluation_complete [dry_run_diff=0]
+    IDLE --> CHANGE_DETECTED: startup_evaluation_complete [dry_run_diff=1]
     READY --> CHANGE_DETECTED: upload_detected
-    ERROR --> CHANGE_DETECTED: upload_detected
 
     CHANGE_DETECTED --> READY: debounce_complete [dry_run_diff=0]
     CHANGE_DETECTED --> BUILD_SLOT_B: debounce_complete [ACTIVE_SLOT=A && dry_run_diff=1]
@@ -427,6 +472,8 @@ stateDiagram-v2
 
     READY --> BUILD_SLOT_B: manual_rebuild [ACTIVE_SLOT=A]
     READY --> BUILD_SLOT_A: manual_rebuild [ACTIVE_SLOT=B]
+    ERROR --> BUILD_SLOT_B: manual_rebuild [ACTIVE_SLOT=A]
+    ERROR --> BUILD_SLOT_A: manual_rebuild [ACTIVE_SLOT=B]
 
     BUILD_SLOT_A --> BUILD_SLOT_A: upload_detected / rebuild_pending=1
     BUILD_SLOT_B --> BUILD_SLOT_B: upload_detected / rebuild_pending=1
@@ -446,7 +493,7 @@ stateDiagram-v2
 ```
 
 Opis stanów:
-- `IDLE`: brak aktywnego przebiegu,
+- `IDLE`: stan przejściowy występujący wyłącznie przy starcie usługi,
 - `CHANGE_DETECTED`: debounce i detekcja rzeczywistej zmiany,
 - `BUILD_SLOT_A`: rebuild slotu A przy aktywnym B,
 - `BUILD_SLOT_B`: rebuild slotu B przy aktywnym A,
@@ -454,6 +501,11 @@ Opis stanów:
 - `EXPORT_START`: publikacja slotu rebuild,
 - `READY`: stabilny eksport,
 - `ERROR`: blokada automatu do czasu wywołania `manual_rebuild`.
+
+Semantyka stanu `IDLE`:
+- `IDLE` występuje wyłącznie podczas startu usługi,
+- po osiągnięciu `READY` FSM nie wraca do `IDLE` w runtime,
+- `IDLE` przechodzi deterministycznie do `READY` albo `CHANGE_DETECTED` zgodnie z warunkiem `dry_run_diff`.
 
 Formalna definicja stanu `READY`:
 - USB jest aktywne,
@@ -489,6 +541,8 @@ Wymagania:
 - wyjście z `ERROR` wymaga `manual_rebuild`,
 - `status.sh` raportuje ostatni `RUN_ID` i kod błędu,
 - WebUI wyświetla stan `ERROR` jednoznacznie.
+- zdarzenia `upload_detected` w stanie `ERROR` są ignorowane logicznie przez FSM i nie powodują przejścia stanu,
+- zdarzenie `upload_detected` w stanie `ERROR` może wyłącznie ustawić `rebuild_pending=1`.
 
 ## Zachowanie flag przy przejściu do ERROR
 
@@ -550,8 +604,12 @@ Wymagania:
 Wymagania:
 - zanik zasilania podczas `BUILD_SLOT_*` nie modyfikuje aktywnego slotu,
 - przy starcie wykonywana jest walidacja slotu wskazanego przez `CNC_ACTIVE_SLOT_FILE`,
-- niepoprawny aktywny slot wymusza fallback do slotu przeciwnego,
-- fallback jest zapisywany atomowo do `CNC_ACTIVE_SLOT_FILE`.
+- fallback do slotu przeciwnego jest wykonywany wyłącznie, gdy:
+  - slot przeciwny istnieje,
+  - slot przeciwny przechodzi walidację integralności (mount `ro`),
+- fallback jest zapisywany atomowo do `CNC_ACTIVE_SLOT_FILE`,
+- jeśli slot przeciwny nie przejdzie walidacji integralności, FSM przechodzi do `ERROR`,
+- jeśli slot przeciwny nie przejdzie walidacji integralności, system nie wykonuje automatycznego rebuild bez `manual_rebuild`.
 
 Kontrole startowe:
 - brak obrazu slotu,
@@ -734,8 +792,15 @@ Dodatkowe limity:
 - przekroczenie timeoutów USB powoduje `rebuild_error`,
 - limity incremental rebuild obowiązują tylko gdy `CNC_SHADOW_INCREMENTAL=true`.
 
+Skutek przekroczenia limitu czasu:
+- ustawienie `last_error` z odpowiednim kodem,
+- przejście FSM do `ERROR`,
+- zwolnienie locka rebuild,
+- brak aktualizacji `CNC_ACTIVE_SLOT_FILE`,
+- brak retry.
+
 Wymagania pojemnościowe:
-- wolna przestrzeń nie mniejsza niż `2 x CNC_SHADOW_SLOT_SIZE_MB + 10%`,
+- wolna przestrzeń nie mniejsza niż `2 * SLOT_SIZE_BYTES + 10% * SLOT_SIZE_BYTES`,
 - przestrzeń poniżej progu blokuje rebuild.
 
 ## Minimalny zakres testów akceptacyjnych
@@ -745,8 +810,8 @@ Wymagania pojemnościowe:
 | 1. upload pojedynczego pliku | `READY` po sekwencji `CHANGE_DETECTED -> BUILD_SLOT_* -> EXPORT_*` | przełączony na slot rebuild | nowy plik widoczny na CNC |
 | 2. upload wielu plików | `READY` | przełączony na slot rebuild | pełna synchronizacja plików i usunięć |
 | 3. upload w trakcie rebuild | `READY` po dodatkowej pętli przez `CHANGE_DETECTED` | przełączony po drugim przebiegu | `rebuild_pending=1` obsłużony bez równoległych buildów |
-| 4. zanik zasilania podczas BUILD | po restarcie `IDLE` lub `CHANGE_DETECTED`, następnie `READY` | aktywny slot sprzed awarii | brak uszkodzenia aktywnego slotu |
-| 5. zanik zasilania podczas EXPORT_STOP | po restarcie `ERROR` albo `IDLE` zależnie od walidacji, finalnie `READY` po manual_rebuild | ostatni poprawny slot | brak niekontrolowanego przełączenia |
+| 4. zanik zasilania podczas BUILD | po restarcie przejście przez `IDLE` do `READY` albo `CHANGE_DETECTED`, następnie `READY` | aktywny slot sprzed awarii | brak uszkodzenia aktywnego slotu |
+| 5. zanik zasilania podczas EXPORT_STOP | po restarcie `ERROR` albo przejście przez `IDLE` do `READY` albo `CHANGE_DETECTED`, finalnie `READY` po `manual_rebuild` | ostatni poprawny slot | brak niekontrolowanego przełączenia |
 | 6. brak miejsca na SD | `ERROR` | bez zmian | `rebuild_error` z kodem braku przestrzeni |
 | 7. zmiana SLOT_SIZE | `READY` po dwóch full rebuildach i jednym przełączeniu | zgodny z sekwencją zmiany rozmiaru | oba sloty w nowym rozmiarze |
 | 8. manual_rebuild | `READY` | przełączony na slot rebuild | rebuild uruchomiony z CLI/systemd-run/WebUI |
