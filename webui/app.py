@@ -86,6 +86,14 @@ AP_BLOCK_FLAG = os.environ.get(
 )
 CNC_AP_ENABLED = parse_env_bool(os.environ.get("CNC_AP_ENABLED"), default=False)
 CNC_SHADOW_ENABLED = parse_env_bool(os.environ.get("CNC_SHADOW_ENABLED"), default=False)
+SHADOW_STATE_FILE = os.environ.get(
+    "CNC_SHADOW_STATE_FILE",
+    "/var/lib/cnc-control/shadow_state.json",
+)
+SHADOW_MASTER_DIR = os.environ.get(
+    "CNC_MASTER_DIR",
+    "/var/lib/cnc-control/master",
+)
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     REPO_ROOT,
@@ -457,12 +465,26 @@ body.ui-busy #loading-overlay * {
     <span id="mode-label" class="mode-label mode-net">{{ mode }}</span>
   {% elif mode == 'USB (CNC)' %}
     <span id="mode-label" class="mode-label mode-usb">{{ mode }}</span>
+  {% elif mode == 'SHADOW (A/B)' %}
+    <span id="mode-label" class="mode-label mode-net">{{ mode }}</span>
   {% else %}
     <span id="mode-label" class="mode-label mode-unknown">{{ mode }}</span>
   {% endif %}
   <span id="mode-switching" class="mode-status mode-status-hidden" aria-live="polite">PRZEŁĄCZANIE...</span>
 </p>
 
+{% if shadow_enabled and shadow_state %}
+<p>
+  <b>SHADOW FSM:</b> {{ shadow_state.fsm_state }}
+  | <b>ACTIVE_SLOT:</b> {{ shadow_state.active_slot }}
+  | <b>RUN_ID:</b> {{ shadow_state.run_id }}
+</p>
+{% if shadow_state.last_error %}
+<p><b>SHADOW ERROR:</b> {{ shadow_state.last_error.code }} - {{ shadow_state.last_error.message }}</p>
+{% endif %}
+{% endif %}
+
+{% if not shadow_enabled %}
 <form action="/net" method="post">
   <span class="indicator {{ 'indicator--net' if mode == 'SIEĆ (UPLOAD)' else 'indicator--inactive' }}" data-mode-indicator="NET"></span>
   <button type="submit" data-mode-switch="NET">Tryb sieć (upload)</button>
@@ -472,6 +494,7 @@ body.ui-busy #loading-overlay * {
   <span class="indicator {{ 'indicator--usb' if mode == 'USB (CNC)' else 'indicator--inactive' }}" data-mode-indicator="USB"></span>
   <button type="submit" data-mode-switch="USB">Tryb USB (CNC)</button>
 </form>
+{% endif %}
 
 <hr>
 
@@ -798,10 +821,12 @@ body.ui-busy #loading-overlay * {
   const MODE_LABELS = {
     NET: "SIEĆ (UPLOAD)",
     USB: "USB (CNC)",
+    SHADOW: "SHADOW (A/B)",
   };
   const MODE_CLASS = {
     NET: "mode-net",
     USB: "mode-usb",
+    SHADOW: "mode-net",
   };
   const INDICATOR_CLASS = {
     NET: "indicator--net",
@@ -1558,6 +1583,30 @@ def parse_status_mount_point(output):
     return None
 
 
+def get_upload_directory():
+    if CNC_SHADOW_ENABLED:
+        return SHADOW_MASTER_DIR
+    return UPLOAD_DIR
+
+
+def read_shadow_state():
+    if not CNC_SHADOW_ENABLED:
+        return None
+    try:
+        with open(SHADOW_STATE_FILE, "r", encoding="utf-8") as state_file:
+            payload = json.load(state_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    return {
+        "fsm_state": str(payload.get("fsm_state", "UNKNOWN")),
+        "active_slot": str(payload.get("active_slot", "?")),
+        "rebuild_slot": payload.get("rebuild_slot"),
+        "run_id": int(payload.get("run_id", 0)),
+        "last_error": payload.get("last_error"),
+    }
+
+
 def split_nmcli_fields(line):
     fields = []
     buffer = []
@@ -2013,15 +2062,28 @@ def run_mode_script(script_path, mode_label):
 
 @app.route("/")
 def index():
-    usb = is_usb_mode()
-    mode = "USB (CNC)" if usb else "SIEĆ (UPLOAD)"
+    upload_dir = get_upload_directory()
+    shadow_state = read_shadow_state()
+    if CNC_SHADOW_ENABLED:
+        mode = "SHADOW (A/B)"
+    else:
+        usb = is_usb_mode()
+        mode = "USB (CNC)" if usb else "SIEĆ (UPLOAD)"
     files = []
     message = request.args.get("msg")
     version_data = get_app_version()
-    if not UPLOAD_DIR and not message:
-        message = "Brak konfiguracji CNC_UPLOAD_DIR"
-    if not usb and UPLOAD_DIR and os.path.isdir(UPLOAD_DIR):
-        files = [name for name in os.listdir(UPLOAD_DIR) if not is_hidden_file(name)]
+    if not upload_dir and not message:
+        if CNC_SHADOW_ENABLED:
+            message = "Brak konfiguracji CNC_MASTER_DIR"
+        else:
+            message = "Brak konfiguracji CNC_UPLOAD_DIR"
+    if upload_dir and os.path.isdir(upload_dir):
+        files = [name for name in os.listdir(upload_dir) if not is_hidden_file(name)]
+    if CNC_SHADOW_ENABLED and shadow_state and shadow_state.get("fsm_state") == "ERROR":
+        if not message and isinstance(shadow_state.get("last_error"), dict):
+            error_code = shadow_state["last_error"].get("code", "ERR")
+            error_message = shadow_state["last_error"].get("message", "Brak szczegolow")
+            message = f"SHADOW ERROR: {error_code} - {error_message}"
     return render_template_string(
         HTML,
         page="main",
@@ -2031,6 +2093,8 @@ def index():
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
         ap_enabled=CNC_AP_ENABLED,
+        shadow_enabled=CNC_SHADOW_ENABLED,
+        shadow_state=shadow_state,
     )
 
 @app.route("/system")
@@ -2046,10 +2110,14 @@ def system():
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
         ap_enabled=CNC_AP_ENABLED,
+        shadow_enabled=CNC_SHADOW_ENABLED,
+        shadow_state=None,
     )
 
 @app.route("/net", methods=["POST"])
 def net():
+    if CNC_SHADOW_ENABLED:
+        return redirect(url_for("index", msg="Tryb SHADOW: przelaczanie NET/USB jest zablokowane"))
     ok, error_message = run_mode_script(NET_MODE_SCRIPT, "SIEĆ (UPLOAD)")
     if not ok:
         return redirect(url_for("index", msg=error_message))
@@ -2057,6 +2125,8 @@ def net():
 
 @app.route("/usb", methods=["POST"])
 def usb():
+    if CNC_SHADOW_ENABLED:
+        return redirect(url_for("index", msg="Tryb SHADOW: przelaczanie NET/USB jest zablokowane"))
     ok, error_message = run_mode_script(USB_MODE_SCRIPT, "USB (CNC)")
     if not ok:
         return redirect(url_for("index", msg=error_message))
@@ -2064,6 +2134,28 @@ def usb():
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
+    if CNC_SHADOW_ENABLED:
+        shadow_state = read_shadow_state()
+        fsm_state = "UNKNOWN"
+        if shadow_state:
+            fsm_state = shadow_state.get("fsm_state", "UNKNOWN")
+        switching = fsm_state in {
+            "CHANGE_DETECTED",
+            "BUILD_SLOT_A",
+            "BUILD_SLOT_B",
+            "EXPORT_STOP",
+            "EXPORT_START",
+        }
+        return jsonify(
+            {
+                "mode": "SHADOW",
+                "shadow_enabled": True,
+                "shadow_state": shadow_state,
+                "switching": switching,
+                "ap_enabled": CNC_AP_ENABLED,
+            }
+        )
+
     result = subprocess.run(
         [STATUS_SCRIPT],
         capture_output=True,
@@ -2102,44 +2194,45 @@ def api_status():
 
 @app.route("/api/restart-gui", methods=["POST"])
 def api_restart_gui():
-    try:
-        status_result = subprocess.run(
-            [STATUS_SCRIPT],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Timeout status.sh"}), 500
-    except OSError:
-        return jsonify({"error": "Nie można uruchomić status.sh"}), 500
+    if not CNC_SHADOW_ENABLED:
+        try:
+            status_result = subprocess.run(
+                [STATUS_SCRIPT],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "Timeout status.sh"}), 500
+        except OSError:
+            return jsonify({"error": "Nie można uruchomić status.sh"}), 500
 
-    stdout = status_result.stdout or ""
-    stderr = status_result.stderr or ""
-    if status_result.returncode != 0:
-        app.logger.warning(
-            "status.sh zakonczony bledem (rc=%s). stdout='%s' stderr='%s'",
-            status_result.returncode,
-            stdout.strip(),
-            stderr.strip(),
-        )
-        return jsonify({"error": "Błąd status.sh"}), 500
+        stdout = status_result.stdout or ""
+        stderr = status_result.stderr or ""
+        if status_result.returncode != 0:
+            app.logger.warning(
+                "status.sh zakonczony bledem (rc=%s). stdout='%s' stderr='%s'",
+                status_result.returncode,
+                stdout.strip(),
+                stderr.strip(),
+            )
+            return jsonify({"error": "Błąd status.sh"}), 500
 
-    mode = parse_status_mode(stdout)
-    if not mode:
-        app.logger.warning(
-            "Nie rozpoznano trybu z status.sh. stdout='%s' stderr='%s'",
-            stdout.strip(),
-            stderr.strip(),
-        )
-        return jsonify({"error": "Brak trybu w status.sh"}), 500
+        mode = parse_status_mode(stdout)
+        if not mode:
+            app.logger.warning(
+                "Nie rozpoznano trybu z status.sh. stdout='%s' stderr='%s'",
+                stdout.strip(),
+                stderr.strip(),
+            )
+            return jsonify({"error": "Brak trybu w status.sh"}), 500
 
-    if mode == "USB":
-        return jsonify({"error": "GUI restart disabled in USB mode"}), 409
+        if mode == "USB":
+            return jsonify({"error": "GUI restart disabled in USB mode"}), 409
 
-    if mode != "NET":
-        return jsonify({"error": "Nieznany tryb pracy"}), 500
+        if mode != "NET":
+            return jsonify({"error": "Nieznany tryb pracy"}), 500
 
     if not shutil.which("systemctl"):
         return jsonify({"error": "Brak systemctl"}), 500
@@ -2418,20 +2511,24 @@ def wifi_profile_delete():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    if not UPLOAD_DIR:
+    upload_dir = get_upload_directory()
+    if not upload_dir:
+        if CNC_SHADOW_ENABLED:
+            return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
         return redirect(url_for("index", msg="Brak konfiguracji CNC_UPLOAD_DIR"))
 
-    if is_usb_mode():
-        return redirect(url_for("index", msg="Tryb USB: upload niedostępny"))
+    if not CNC_SHADOW_ENABLED:
+        if is_usb_mode():
+            return redirect(url_for("index", msg="Tryb USB: upload niedostępny"))
 
-    mount_active = is_mount_active(UPLOAD_DIR)
-    if mount_active is not True:
-        log_webui_event(
-            f"Upload blocked: upload dir not mounted ({UPLOAD_DIR}), mount_active={mount_active}"
-        )
-        return redirect(
-            url_for("index", msg="Upload niedostepny: obraz USB nie jest zamontowany")
-        )
+        mount_active = is_mount_active(upload_dir)
+        if mount_active is not True:
+            log_webui_event(
+                f"Upload blocked: upload dir not mounted ({upload_dir}), mount_active={mount_active}"
+            )
+            return redirect(
+                url_for("index", msg="Upload niedostepny: obraz USB nie jest zamontowany")
+            )
 
     if "file" not in request.files:
         return redirect(url_for("index", msg="Brak pliku w żądaniu"))
@@ -2445,8 +2542,8 @@ def upload():
         return redirect(url_for("index", msg="Nieprawidłowa nazwa pliku"))
 
     try:
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        target_path = os.path.join(UPLOAD_DIR, safe_name)
+        os.makedirs(upload_dir, exist_ok=True)
+        target_path = os.path.join(upload_dir, safe_name)
         f.save(target_path)
     except Exception:
         return redirect(url_for("index", msg="Błąd zapisu pliku"))
