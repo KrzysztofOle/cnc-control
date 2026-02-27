@@ -115,6 +115,19 @@ class ShadowManager:
         with self._history_lock:
             return list(reversed(self._history_entries))[:resolved_limit]
 
+    def get_manual_status(self):
+        with self._manual_lock:
+            running = self._manual_thread is not None and self._manual_thread.is_alive()
+
+        last_manual = None
+        with self._history_lock:
+            for entry in reversed(self._history_entries):
+                if entry.get("trigger") == "manual":
+                    last_manual = dict(entry)
+                    break
+
+        return {"running": running, "last_manual": last_manual}
+
     def _manual_rebuild_worker(self) -> None:
         self._run_rebuild_cycle(trigger="manual", mark_lock_conflict_error=False)
 

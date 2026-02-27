@@ -1118,6 +1118,50 @@ body.ui-busy #loading-overlay * {
       }
     }
 
+    function formatManualStatus(payload) {
+      if (!payload || typeof payload !== "object") {
+        return { text: "Status: bezczynny", level: "muted" };
+      }
+      if (payload.running === true) {
+        return { text: "Status: manual_rebuild w toku...", level: "muted" };
+      }
+      const lastManual = payload.last_manual;
+      if (!lastManual || typeof lastManual !== "object") {
+        return { text: "Status: bezczynny", level: "muted" };
+      }
+      const runId = lastManual.run_id ?? "?";
+      if (lastManual.result === "ok") {
+        return { text: `Status: manual_rebuild zakonczony (RUN_ID ${runId})`, level: "ok" };
+      }
+      if (lastManual.result === "lock_conflict") {
+        return { text: "Status: manual_rebuild odrzucony (lock zajety)", level: "error" };
+      }
+      const errorMessage =
+        lastManual.error && typeof lastManual.error === "object"
+          ? (lastManual.error.message || "blad")
+          : "blad";
+      return { text: `Status: manual_rebuild nieudany (${errorMessage})`, level: "error" };
+    }
+
+    async function refreshManualStatus() {
+      try {
+        const response = await fetch("/api/shadow/manual-status", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json();
+        const display = formatManualStatus(payload);
+        setShadowStatus(display.text, display.level);
+      } catch (error) {
+        // PL: Brak odpowiedzi nie powinien blokowac pozostalych funkcji UI.
+        // EN: Temporary status API failures must not block the rest of the UI.
+      }
+    }
+
     async function refreshShadowHistory() {
       try {
         const response = await fetch("/api/shadow/history?limit=10", {
@@ -1161,11 +1205,14 @@ body.ui-busy #loading-overlay * {
           manualButton.disabled = false;
         }, 1000);
         refreshShadowHistory();
+        refreshManualStatus();
       }
     });
 
     refreshShadowHistory();
+    refreshManualStatus();
     setInterval(refreshShadowHistory, 3000);
+    setInterval(refreshManualStatus, 1000);
   }
 
   function applySwitching(switching) {
@@ -2585,6 +2632,20 @@ def api_shadow_manual_rebuild():
     if not started:
         return jsonify({"error": message}), 409
     return jsonify({"ok": True, "message": message})
+
+
+@app.route("/api/shadow/manual-status", methods=["GET"])
+def api_shadow_manual_status():
+    if not CNC_SHADOW_ENABLED:
+        return jsonify({"error": "Tryb SHADOW jest wylaczony"}), 409
+    manager = get_shadow_manager_instance()
+    if manager is None:
+        return jsonify({"error": "Manager SHADOW nie jest dostepny"}), 503
+    try:
+        status = manager.get_manual_status()
+    except Exception as exc:
+        return jsonify({"error": f"Nie mozna pobrac statusu manual_rebuild: {exc}"}), 500
+    return jsonify(status)
 
 
 @app.route("/api/restart-gui", methods=["POST"])
