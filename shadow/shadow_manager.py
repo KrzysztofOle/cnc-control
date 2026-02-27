@@ -18,7 +18,7 @@ class ShadowManager:
     _LED_MODE_BY_STATE = {
         "IDLE": "UPLOAD",
         "READY": "UPLOAD",
-        "CHANGE_DETECTED": "USB",
+        "CHANGE_DETECTED": "SHADOW_PENDING",
         "BUILD_SLOT_A": "USB",
         "BUILD_SLOT_B": "USB",
         "EXPORT_STOP": "USB",

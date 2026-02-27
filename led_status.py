@@ -20,6 +20,7 @@ class LedMode(Enum):
     BOOT = auto()
     USB = auto()
     UPLOAD = auto()
+    SHADOW_PENDING = auto()
     AP = auto()
     ERROR = auto()
     IDLE = auto()
@@ -35,6 +36,7 @@ MODE_PATTERNS: Dict[LedMode, _LedPattern] = {
     LedMode.BOOT: _LedPattern((255, 180, 0), 0.0),
     LedMode.USB: _LedPattern((255, 0, 0), 0.0),
     LedMode.UPLOAD: _LedPattern((0, 255, 0), 0.0),
+    LedMode.SHADOW_PENDING: _LedPattern((0, 0, 255), 0.0),
     LedMode.AP: _LedPattern((0, 0, 255), 1.0),
     LedMode.ERROR: _LedPattern((255, 0, 0), 3.0),
     LedMode.IDLE: _LedPattern((76, 76, 76), 0.0),
