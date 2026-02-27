@@ -223,6 +223,12 @@ HTML = """
   border: 1px solid #ffcc80;
 }
 
+.mode-shadow {
+  color: #124a2b;
+  background: #e8f5e9;
+  border: 1px solid #81c784;
+}
+
 .mode-unknown {
   color: #555555;
   background: #f2f2f2;
@@ -246,6 +252,56 @@ HTML = """
   color: #8a6d1d;
   background: #fff8e1;
   border: 1px solid #ffe082;
+}
+
+.shadow-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.shadow-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.shadow-badge-label {
+  opacity: 0.85;
+}
+
+.shadow-badge-value {
+  font-family: monospace;
+}
+
+.shadow-badge--ready {
+  color: #1b5e20;
+  background: #e8f5e9;
+  border-color: #81c784;
+}
+
+.shadow-badge--updating {
+  color: #8e0000;
+  background: #ffebee;
+  border-color: #ef9a9a;
+}
+
+.shadow-badge--error {
+  color: #b71c1c;
+  background: #ffebee;
+  border-color: #e57373;
+}
+
+.shadow-badge--unknown {
+  color: #555555;
+  background: #f2f2f2;
+  border-color: #d6d6d6;
 }
 
 button {
@@ -466,7 +522,7 @@ body.ui-busy #loading-overlay * {
   {% elif mode == 'USB (CNC)' %}
     <span id="mode-label" class="mode-label mode-usb">{{ mode }}</span>
   {% elif mode == 'SHADOW (A/B)' %}
-    <span id="mode-label" class="mode-label mode-net">{{ mode }}</span>
+    <span id="mode-label" class="mode-label mode-shadow">{{ mode }}</span>
   {% else %}
     <span id="mode-label" class="mode-label mode-unknown">{{ mode }}</span>
   {% endif %}
@@ -474,11 +530,20 @@ body.ui-busy #loading-overlay * {
 </p>
 
 {% if shadow_enabled and shadow_state %}
-<p>
-  <b>SHADOW FSM:</b> {{ shadow_state.fsm_state }}
-  | <b>ACTIVE_SLOT:</b> {{ shadow_state.active_slot }}
-  | <b>RUN_ID:</b> {{ shadow_state.run_id }}
-</p>
+<div class="shadow-status-row">
+  <span id="shadow-fsm-badge" class="shadow-badge shadow-badge--{{ shadow_fsm_class }}">
+    <span class="shadow-badge-label">SHADOW FSM</span>
+    <span id="shadow-fsm-value" class="shadow-badge-value">{{ shadow_state.fsm_state }}</span>
+  </span>
+  <span class="shadow-badge shadow-badge--unknown">
+    <span class="shadow-badge-label">ACTIVE_SLOT</span>
+    <span id="shadow-active-slot-value" class="shadow-badge-value">{{ shadow_state.active_slot }}</span>
+  </span>
+  <span class="shadow-badge shadow-badge--unknown">
+    <span class="shadow-badge-label">RUN_ID</span>
+    <span id="shadow-run-id-value" class="shadow-badge-value">{{ shadow_state.run_id }}</span>
+  </span>
+</div>
 {% if shadow_state.last_error %}
 <p><b>SHADOW ERROR:</b> {{ shadow_state.last_error.code }} - {{ shadow_state.last_error.message }}</p>
 {% endif %}
@@ -826,7 +891,7 @@ body.ui-busy #loading-overlay * {
   const MODE_CLASS = {
     NET: "mode-net",
     USB: "mode-usb",
-    SHADOW: "mode-net",
+    SHADOW: "mode-shadow",
   };
   const INDICATOR_CLASS = {
     NET: "indicator--net",
@@ -841,7 +906,7 @@ body.ui-busy #loading-overlay * {
     const modeLabel = document.getElementById("mode-label");
     if (modeLabel) {
       modeLabel.textContent = label;
-      modeLabel.classList.remove("mode-net", "mode-usb", "mode-unknown");
+      modeLabel.classList.remove("mode-net", "mode-usb", "mode-shadow", "mode-unknown");
       modeLabel.classList.add(MODE_CLASS[mode] || "mode-unknown");
     }
     updateRestartGuiButton(mode);
@@ -856,6 +921,52 @@ body.ui-busy #loading-overlay * {
         indicator.classList.add("indicator--inactive");
       }
     });
+  }
+
+  function shadowFsmGroup(fsmState) {
+    const value = String(fsmState || "").toUpperCase();
+    if (value === "IDLE" || value === "READY") {
+      return "ready";
+    }
+    if (value === "CHANGE_DETECTED" || value === "BUILD_SLOT_A" || value === "BUILD_SLOT_B" || value === "EXPORT_STOP" || value === "EXPORT_START") {
+      return "updating";
+    }
+    if (value === "ERROR") {
+      return "error";
+    }
+    return "unknown";
+  }
+
+  function applyShadowState(shadowState) {
+    if (!shadowState || typeof shadowState !== "object") {
+      return;
+    }
+    const fsmValue = document.getElementById("shadow-fsm-value");
+    const activeSlotValue = document.getElementById("shadow-active-slot-value");
+    const runIdValue = document.getElementById("shadow-run-id-value");
+    const fsmBadge = document.getElementById("shadow-fsm-badge");
+
+    const fsmState = shadowState.fsm_state || "UNKNOWN";
+    if (fsmValue) {
+      fsmValue.textContent = fsmState;
+    }
+    if (activeSlotValue && "active_slot" in shadowState) {
+      activeSlotValue.textContent = String(shadowState.active_slot || "?");
+    }
+    if (runIdValue && "run_id" in shadowState) {
+      runIdValue.textContent = String(shadowState.run_id);
+    }
+
+    if (fsmBadge) {
+      const fsmClass = "shadow-badge--" + shadowFsmGroup(fsmState);
+      fsmBadge.classList.remove(
+        "shadow-badge--ready",
+        "shadow-badge--updating",
+        "shadow-badge--error",
+        "shadow-badge--unknown",
+      );
+      fsmBadge.classList.add(fsmClass);
+    }
   }
 
   function applySwitching(switching) {
@@ -891,6 +1002,9 @@ body.ui-busy #loading-overlay * {
       const payload = await response.json();
       if (payload && payload.mode) {
         applyMode(payload.mode);
+      }
+      if (payload && payload.shadow_state) {
+        applyShadowState(payload.shadow_state);
       }
       if (payload && "switching" in payload) {
         applySwitching(payload.switching);
@@ -1607,6 +1721,17 @@ def read_shadow_state():
     }
 
 
+def shadow_fsm_group(fsm_state):
+    state = (fsm_state or "").upper()
+    if state in {"IDLE", "READY"}:
+        return "ready"
+    if state in {"CHANGE_DETECTED", "BUILD_SLOT_A", "BUILD_SLOT_B", "EXPORT_STOP", "EXPORT_START"}:
+        return "updating"
+    if state == "ERROR":
+        return "error"
+    return "unknown"
+
+
 def split_nmcli_fields(line):
     fields = []
     buffer = []
@@ -2064,6 +2189,9 @@ def run_mode_script(script_path, mode_label):
 def index():
     upload_dir = get_upload_directory()
     shadow_state = read_shadow_state()
+    shadow_fsm_class = "unknown"
+    if shadow_state:
+        shadow_fsm_class = shadow_fsm_group(shadow_state.get("fsm_state"))
     if CNC_SHADOW_ENABLED:
         mode = "SHADOW (A/B)"
     else:
@@ -2095,6 +2223,7 @@ def index():
         ap_enabled=CNC_AP_ENABLED,
         shadow_enabled=CNC_SHADOW_ENABLED,
         shadow_state=shadow_state,
+        shadow_fsm_class=shadow_fsm_class,
     )
 
 @app.route("/system")
@@ -2112,6 +2241,7 @@ def system():
         ap_enabled=CNC_AP_ENABLED,
         shadow_enabled=CNC_SHADOW_ENABLED,
         shadow_state=None,
+        shadow_fsm_class="unknown",
     )
 
 @app.route("/net", methods=["POST"])
