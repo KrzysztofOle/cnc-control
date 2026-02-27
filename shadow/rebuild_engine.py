@@ -45,14 +45,15 @@ class RebuildEngine:
                 [self._resolve_binary("mkfs.vfat"), "-F", "32", tmp_path],
                 "Nie udalo sie sformatowac obrazu FAT.",
             )
-            if self._master_has_content():
+            master_entries = self._list_master_entries()
+            if master_entries:
                 self._run_command(
                     [
                         self._resolve_binary("mcopy"),
                         "-s",
                         "-i",
                         tmp_path,
-                        f"{self._config.master_dir}/",
+                        *master_entries,
                         "::",
                     ],
                     "Nie udalo sie skopiowac danych do obrazu FAT.",
@@ -93,10 +94,8 @@ class RebuildEngine:
             detail = result.stderr.strip() or result.stdout.strip() or "Brak szczegolow"
             raise RebuildError(f"{error_message} ({detail})")
 
-    def _master_has_content(self) -> bool:
-        for _ in os.scandir(self._config.master_dir):
-            return True
-        return False
+    def _list_master_entries(self):
+        return sorted(entry.path for entry in os.scandir(self._config.master_dir))
 
     @staticmethod
     def _fsync_path(path: str) -> None:
