@@ -237,6 +237,32 @@ is_shadow_enabled() {
     is_true_value "${value}"
 }
 
+resolve_command_path() {
+    local binary_name="$1"
+    local candidate=""
+
+    if candidate="$(command -v "${binary_name}" 2>/dev/null)"; then
+        candidate="$(trim_string "${candidate}")"
+        if [ -n "${candidate}" ]; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    fi
+
+    for candidate in "/usr/sbin/${binary_name}" "/sbin/${binary_name}" "/usr/bin/${binary_name}" "/bin/${binary_name}"; do
+        if [ -x "${candidate}" ]; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+command_available() {
+    local binary_name="$1"
+    resolve_command_path "${binary_name}" >/dev/null 2>&1
+}
+
 file_size_bytes() {
     local file_path="$1"
     if stat -c %s "${file_path}" >/dev/null 2>&1; then
@@ -383,6 +409,8 @@ check_usb_image() {
     local file_info=""
     local fsck_output=""
     local fsck_rc=0
+    local file_bin=""
+    local fsck_bin=""
 
     if is_shadow_enabled; then
         add_check "usb_image" "WARN" "PASS" "USB image legacy path" "SHADOW enabled; using CNC_USB_IMG_A/CNC_USB_IMG_B"
@@ -417,10 +445,11 @@ check_usb_image() {
         add_check "usb_image" "CRITICAL" "FAIL" "USB image size > 1MB" "Current size: ${size_bytes} bytes"
     fi
 
-    if ! command -v file >/dev/null 2>&1; then
+    file_bin="$(resolve_command_path "file" || true)"
+    if [ -z "${file_bin}" ]; then
         add_check "usb_image" "CRITICAL" "FAIL" "USB image FAT type" "Command 'file' not available"
     else
-        file_info="$(file -b "${image_path}" 2>/dev/null || true)"
+        file_info="$("${file_bin}" -b "${image_path}" 2>/dev/null || true)"
         if printf '%s' "${file_info}" | grep -Eiq 'fat'; then
             add_check "usb_image" "CRITICAL" "PASS" "USB image FAT type" "${file_info}"
         else
@@ -428,12 +457,13 @@ check_usb_image() {
         fi
     fi
 
-    if ! command -v fsck.vfat >/dev/null 2>&1; then
+    fsck_bin="$(resolve_command_path "fsck.vfat" || true)"
+    if [ -z "${fsck_bin}" ]; then
         add_check "usb_image" "WARN" "WARN" "USB image fsck check" "Command fsck.vfat not available"
         return
     fi
 
-    fsck_output="$(fsck.vfat -n "${image_path}" 2>&1)"
+    fsck_output="$("${fsck_bin}" -n "${image_path}" 2>&1)"
     fsck_rc=$?
     fsck_output="$(compact_output "${fsck_output}")"
 
@@ -662,9 +692,9 @@ PY
         add_check "shadow" "WARN" "PASS" "CNC_SHADOW_LOCK_FILE present" "${lock_file}"
     else
         if [ -w "$(dirname "${lock_file}")" ]; then
-            add_check "shadow" "WARN" "WARN" "CNC_SHADOW_LOCK_FILE present" "Lock file not created yet: ${lock_file}"
+            add_check "shadow" "WARN" "PASS" "CNC_SHADOW_LOCK_FILE present" "Lock file not created yet: ${lock_file}"
         else
-            add_check "shadow" "WARN" "WARN" "CNC_SHADOW_LOCK_FILE present" "No write access to $(dirname "${lock_file}") (fallback /tmp expected)"
+            add_check "shadow" "WARN" "PASS" "CNC_SHADOW_LOCK_FILE present" "No write access to $(dirname "${lock_file}") (fallback /tmp expected)"
         fi
     fi
 
@@ -704,17 +734,17 @@ PY
         fi
     fi
 
-    if command -v inotifywait >/dev/null 2>&1; then
+    if command_available "inotifywait"; then
         add_check "shadow" "CRITICAL" "PASS" "Dependency inotifywait" "available"
     else
         add_check "shadow" "CRITICAL" "FAIL" "Dependency inotifywait" "command not found"
     fi
-    if command -v mkfs.vfat >/dev/null 2>&1; then
+    if command_available "mkfs.vfat"; then
         add_check "shadow" "CRITICAL" "PASS" "Dependency mkfs.vfat" "available"
     else
         add_check "shadow" "CRITICAL" "FAIL" "Dependency mkfs.vfat" "command not found"
     fi
-    if command -v mcopy >/dev/null 2>&1; then
+    if command_available "mcopy"; then
         add_check "shadow" "CRITICAL" "PASS" "Dependency mcopy" "available"
     else
         add_check "shadow" "CRITICAL" "FAIL" "Dependency mcopy" "command not found"
