@@ -571,40 +571,6 @@ body.ui-busy #loading-overlay * {
 {% else %}
 <p id="shadow-error-line" style="display:none;"><b>SHADOW ERROR:</b> <span id="shadow-error-code"></span> - <span id="shadow-error-message"></span></p>
 {% endif %}
-
-<div class="shadow-status-row">
-  <button type="button" id="shadow-manual-rebuild">Manual rebuild</button>
-  <span id="shadow-manual-status" class="wifi-status wifi-status-muted">Status: bezczynny</span>
-</div>
-
-<h4>Historia przebiegow SHADOW</h4>
-<div id="shadow-history-empty" class="wifi-status wifi-status-muted" {% if shadow_history %}style="display:none;"{% endif %}>
-  Brak wpisow historii.
-</div>
-<table id="shadow-history-table" {% if not shadow_history %}style="display:none;"{% endif %}>
-  <thead>
-    <tr>
-      <th>RUN_ID</th>
-      <th>TRIGGER</th>
-      <th>RESULT</th>
-      <th>SLOT</th>
-      <th>CZAS (ms)</th>
-      <th>KONIEC</th>
-    </tr>
-  </thead>
-  <tbody id="shadow-history-body">
-  {% for entry in shadow_history %}
-    <tr>
-      <td>{{ entry.run_id }}</td>
-      <td>{{ entry.trigger }}</td>
-      <td>{{ entry.result }}</td>
-      <td>{{ entry.active_slot_before }}→{{ entry.active_slot_after }}</td>
-      <td>{{ entry.duration_ms }}</td>
-      <td>{{ entry.finished_at }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
 {% endif %}
 
 {% if not shadow_enabled %}
@@ -743,6 +709,45 @@ body.ui-busy #loading-overlay * {
   </div>
   <div id="wifi-status" class="wifi-status wifi-status-muted">Status: bezczynny</div>
 </div>
+
+{% if shadow_enabled %}
+<hr>
+
+<h3>SHADOW</h3>
+<div class="shadow-status-row">
+  <button type="button" id="shadow-manual-rebuild">Manual rebuild</button>
+  <span id="shadow-manual-status" class="wifi-status wifi-status-muted">Status: bezczynny</span>
+</div>
+
+<h4>Historia przebiegow SHADOW</h4>
+<div id="shadow-history-empty" class="wifi-status wifi-status-muted" {% if shadow_history %}style="display:none;"{% endif %}>
+  Brak wpisow historii.
+</div>
+<table id="shadow-history-table" {% if not shadow_history %}style="display:none;"{% endif %}>
+  <thead>
+    <tr>
+      <th>RUN_ID</th>
+      <th>TRIGGER</th>
+      <th>RESULT</th>
+      <th>SLOT</th>
+      <th>CZAS (ms)</th>
+      <th>KONIEC</th>
+    </tr>
+  </thead>
+  <tbody id="shadow-history-body">
+  {% for entry in shadow_history %}
+    <tr>
+      <td>{{ entry.run_id }}</td>
+      <td>{{ entry.trigger }}</td>
+      <td>{{ entry.result }}</td>
+      <td>{{ entry.active_slot_before }}→{{ entry.active_slot_after }}</td>
+      <td>{{ entry.duration_ms }}</td>
+      <td>{{ entry.finished_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 {% endif %}
 
 <script>
@@ -2514,6 +2519,13 @@ def index():
 def system():
     message = request.args.get("msg")
     version_data = get_app_version()
+    shadow_state = read_shadow_state()
+    shadow_history = []
+    if CNC_SHADOW_ENABLED:
+        shadow_history = read_shadow_history(limit=10)
+    shadow_fsm_class = "unknown"
+    if shadow_state:
+        shadow_fsm_class = shadow_fsm_group(shadow_state.get("fsm_state"))
     return render_template_string(
         HTML,
         page="system",
@@ -2524,9 +2536,9 @@ def system():
         app_description=version_data.get("description"),
         ap_enabled=CNC_AP_ENABLED,
         shadow_enabled=CNC_SHADOW_ENABLED,
-        shadow_state=None,
-        shadow_fsm_class="unknown",
-        shadow_history=[],
+        shadow_state=shadow_state,
+        shadow_fsm_class=shadow_fsm_class,
+        shadow_history=shadow_history,
     )
 
 @app.route("/net", methods=["POST"])
