@@ -449,6 +449,7 @@ fi
 chown root:root "${ENV_DEST}"
 chmod 644 "${ENV_DEST}"
 upsert_env_var "${ENV_DEST}" "CNC_CONTROL_REPO" "${REPO_ROOT}"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_DEBOUNCE_SECONDS" "2"
 
 # shellcheck source=/etc/cnc-control/cnc-control.env
 set -a

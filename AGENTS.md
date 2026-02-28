@@ -182,8 +182,8 @@ Następnie wykonuje sekwencję:
 cd ~/cnc-control
 git pull --ff-only
 source .venv/bin/activate
-pip install -editable ".[rpi]"
-cnc_selftest -json
+pip install --editable ".[rpi]"
+cnc_selftest --json
 
 Dodatkowo sprawdza:
 
