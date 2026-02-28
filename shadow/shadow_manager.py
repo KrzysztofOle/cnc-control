@@ -143,12 +143,16 @@ class ShadowManager:
 
     def _watch_loop(self) -> None:
         while True:
-            event = self._watcher_service.poll_event(timeout_seconds=1.0)
-            if event is None:
-                continue
-            self._logger.info("SHADOW wykryto zmiane: %s", event)
-            self._wait_for_debounce()
-            self._run_rebuild_cycle(trigger="watch", mark_lock_conflict_error=True)
+            try:
+                event = self._watcher_service.poll_event(timeout_seconds=1.0)
+                if event is None:
+                    continue
+                self._logger.info("SHADOW wykryto zmiane: %s", event)
+                self._wait_for_debounce()
+                self._run_rebuild_cycle(trigger="watch", mark_lock_conflict_error=True)
+            except Exception as exc:
+                self._logger.exception("SHADOW watch-loop blad krytyczny: %s", exc)
+                time.sleep(1.0)
 
     def _wait_for_debounce(self) -> None:
         if self._debounce_seconds <= 0:

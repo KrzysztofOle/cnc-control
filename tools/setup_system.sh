@@ -37,6 +37,8 @@ SAMBA_FORCE_USER=""
 SAMBA_FORCE_GROUP=""
 SAMBA_FORCE_USER_LINE=""
 SAMBA_FORCE_GROUP_LINE=""
+SHADOW_RUNTIME_USER=""
+SHADOW_RUNTIME_GROUP=""
 CLOUD_INIT_UNITS=(
     cloud-init-local.service
     cloud-init.service
@@ -180,6 +182,60 @@ resolve_samba_force_identity() {
     if [ -n "${SAMBA_FORCE_GROUP}" ]; then
         SAMBA_FORCE_GROUP_LINE="   force group = ${SAMBA_FORCE_GROUP}"
     fi
+}
+
+resolve_shadow_runtime_identity() {
+    local owner_user=""
+    local owner_group=""
+
+    SHADOW_RUNTIME_USER="${SAMBA_FORCE_USER}"
+    SHADOW_RUNTIME_GROUP="${SAMBA_FORCE_GROUP}"
+
+    if [ -n "${CNC_MASTER_DIR:-}" ] && [ -e "${CNC_MASTER_DIR}" ]; then
+        owner_user="$(stat -c '%U' "${CNC_MASTER_DIR}" 2>/dev/null || true)"
+        owner_group="$(stat -c '%G' "${CNC_MASTER_DIR}" 2>/dev/null || true)"
+        owner_user="$(printf '%s' "${owner_user}" | tr -d '\r\n')"
+        owner_group="$(printf '%s' "${owner_group}" | tr -d '\r\n')"
+
+        if [ -z "${SHADOW_RUNTIME_USER}" ] && [ -n "${owner_user}" ] && [ "${owner_user}" != "UNKNOWN" ] && id -u "${owner_user}" >/dev/null 2>&1; then
+            SHADOW_RUNTIME_USER="${owner_user}"
+        fi
+        if [ -z "${SHADOW_RUNTIME_GROUP}" ] && [ -n "${owner_group}" ] && [ "${owner_group}" != "UNKNOWN" ] && getent group "${owner_group}" >/dev/null 2>&1; then
+            SHADOW_RUNTIME_GROUP="${owner_group}"
+        fi
+    fi
+
+    if [ -n "${SHADOW_RUNTIME_USER}" ] && [ -z "${SHADOW_RUNTIME_GROUP}" ]; then
+        SHADOW_RUNTIME_GROUP="$(id -gn "${SHADOW_RUNTIME_USER}" 2>/dev/null || true)"
+    fi
+}
+
+apply_shadow_runtime_permissions() {
+    local runtime_user="$1"
+    local runtime_group="$2"
+    local shadow_entries=()
+    local entry=""
+
+    if [ -z "${runtime_user}" ] || [ -z "${runtime_group}" ]; then
+        echo "[WARN] Nie mozna ustalic wlasciciela SHADOW runtime. Pozostawiam /var/lib/cnc-control bez zmian."
+        return 0
+    fi
+
+    chown "${runtime_user}:${runtime_group}" /var/lib/cnc-control
+    chmod 775 /var/lib/cnc-control
+
+    shadow_entries+=("${CNC_MASTER_DIR:-${SHADOW_MASTER_DIR_DEFAULT}}")
+    shadow_entries+=("${CNC_USB_IMG_A:-/var/lib/cnc-control/cnc_usb_a.img}")
+    shadow_entries+=("${CNC_USB_IMG_B:-/var/lib/cnc-control/cnc_usb_b.img}")
+    shadow_entries+=("${CNC_ACTIVE_SLOT_FILE:-/var/lib/cnc-control/shadow_active_slot.state}")
+    shadow_entries+=("${CNC_SHADOW_STATE_FILE:-/var/lib/cnc-control/shadow_state.json}")
+    shadow_entries+=("${CNC_SHADOW_HISTORY_FILE:-/var/lib/cnc-control/shadow_history.json}")
+
+    for entry in "${shadow_entries[@]}"; do
+        if [ -e "${entry}" ]; then
+            chown "${runtime_user}:${runtime_group}" "${entry}"
+        fi
+    done
 }
 
 has_dwc2_overlay_in_all_section() {
@@ -410,8 +466,19 @@ if [ -n "${SAMBA_FORCE_GROUP}" ]; then
     echo "[INFO] Samba force group: ${SAMBA_FORCE_GROUP}"
 fi
 
-chown root:root /var/lib/cnc-control
-chmod 755 /var/lib/cnc-control
+if is_true_value "${CNC_SHADOW_ENABLED:-false}"; then
+    resolve_shadow_runtime_identity
+    if [ -n "${SHADOW_RUNTIME_USER}" ]; then
+        echo "[INFO] SHADOW runtime user: ${SHADOW_RUNTIME_USER}"
+    fi
+    if [ -n "${SHADOW_RUNTIME_GROUP}" ]; then
+        echo "[INFO] SHADOW runtime group: ${SHADOW_RUNTIME_GROUP}"
+    fi
+    apply_shadow_runtime_permissions "${SHADOW_RUNTIME_USER}" "${SHADOW_RUNTIME_GROUP}"
+else
+    chown root:root /var/lib/cnc-control
+    chmod 755 /var/lib/cnc-control
+fi
 
 create_usb_image_if_missing
 
