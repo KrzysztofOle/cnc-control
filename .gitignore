@@ -41,3 +41,8 @@ dist/
 # ===============================
 .DS_Store
 Thumbs.db
+
+# ===============================
+# Test artifacts
+# ===============================
+integration_tests/report.json
