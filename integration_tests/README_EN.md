@@ -11,6 +11,9 @@ The runner covers:
 - SMB (share write/delete),
 - USB (gadget mode validation + optional host-side read),
 - NET->USB sync checks and timing measurements.
+- SHADOW watcher checks (change detection and rebuild),
+- SHADOW file synchronization (master -> active slot),
+- SHADOW G-code runtime readiness in active LUN.
 
 ## Always-testing-latest-code flow
 
@@ -48,7 +51,8 @@ If any step fails, preflight is marked as `failed` and functional phases are ski
 - `usb`: preflight + `phase_3_usb` (with `--usb-host-mount`, also direct host USB read)
 - `sync`: preflight + `phase_4_sync_net_to_usb`
 - `perf`: preflight + `phase_5_performance`
-- `all`: preflight + all functional phases (`1..5`)
+- `shadow`: preflight + SHADOW phases (`phase_shadow_1_watcher`, `phase_shadow_2_sync_files`, `phase_shadow_3_gcode_runtime`)
+- `all`: preflight + all functional phases (`1..5` + SHADOW phases)
 
 `phase_6_cleanup` always runs at the end.
 

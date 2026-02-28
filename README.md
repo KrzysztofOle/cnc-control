@@ -23,12 +23,11 @@ Projekt jest rozwijany hobbystycznie, z naciskiem na **praktyczne zastosowanie w
 
 > ⚠️ Projekt **nie ingeruje** w logikę PLC sterownika RichAuto – pełni rolę systemu wspomagającego.
 
-## 📣 Status trybów pracy
+## 📣 Tryb pracy (wyłącznie SHADOW)
 
-- `SHADOW` to aktualnie obowiązujący i rekomendowany tryb pracy.
-- Przełączanie `NET/USB` (`net_mode.sh` / `usb_mode.sh`) ma status **legacy**.
-- Tryb `NET/USB` jest stopniowo wycofywany i pozostaje tylko dla kompatybilności wstecznej.
-- Specyfikacja trybu docelowego: `docs/SHADOW_MODE.md`.
+- Projekt działa wyłącznie w trybie `SHADOW`.
+- Przeplyw opiera sie na katalogu `CNC_MASTER_DIR` oraz slotach obrazow USB (`CNC_USB_IMG_A` / `CNC_USB_IMG_B`).
+- Szczegolowa specyfikacja: `docs/SHADOW_MODE.md`.
 
 ---
 
@@ -114,7 +113,7 @@ Skrypt automatycznie:
 - zaktualizuje system (`apt update/upgrade`),
 - utworzy `.venv` i zainstaluje zależności z `pyproject.toml` (z próbą dodatku `rpi-ws281x`),
 - pobierze/odświeży repo `cnc-control` po HTTPS,
-- uruchomi `setup_system.sh`, `setup_commands.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+- uruchomi `setup_system.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
 
 Opcjonalne nadpisanie użytkownika i katalogu repo:
 
@@ -152,23 +151,13 @@ Opis taga jest wyświetlany w WebUI.
 
 ---
 
-## ⌨️ Komendy skrótowe (CLI)
-
-Dla kompatybilności wstecznej nadal dostępne są komendy (`usb_mode`, `net_mode`, `status`, `cnc_selftest`):
+## ⌨️ Narzędzia CLI (diagnostyka)
 
 ```bash
-chmod +x tools/setup_commands.sh
-./tools/setup_commands.sh
-```
-
-Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh`, `tools/cnc_selftest.sh` i w razie potrzeby dodaje `~/.local/bin` do `PATH` (w `~/.bashrc` i `~/.zshrc`). Dla nowych wdrożeń używaj trybu `SHADOW`.
-
-## Diagnostyka
-
-```bash
-cnc_selftest
-cnc_selftest --verbose
-cnc_selftest --json
+./status.sh
+./tools/cnc_selftest.sh
+./tools/cnc_selftest.sh --verbose
+./tools/cnc_selftest.sh --json
 ```
 
 ---
@@ -274,7 +263,7 @@ Konfiguracja jest centralnie zarzadzana przez plik:
 /etc/cnc-control/cnc-control.env
 ```
 
-Plik ten jest wczytywany przez systemd (`EnvironmentFile=`), logikę SHADOW/WebUI oraz skrypty kompatybilności (`net_mode.sh`, `usb_mode.sh`). Brak pliku lub brak wymaganych zmiennych powoduje jawny blad.
+Plik ten jest wczytywany przez systemd (`EnvironmentFile=`), logike SHADOW/WebUI oraz narzedzia diagnostyczne. Brak pliku lub brak wymaganych zmiennych powoduje jawny blad.
 
 Szybki start:
 
@@ -284,28 +273,35 @@ sudo cp config/cnc-control.env.example /etc/cnc-control/cnc-control.env
 sudo nano /etc/cnc-control/cnc-control.env
 ```
 
-Wymagane zmienne (brak domyslnych wartosci):
+Wymagane zmienne dla trybu SHADOW-only:
 
 | Zmienna | Opis | Domyslna wartosc | Uzycie |
 |---|---|---|---|
-| `CNC_USB_IMG` | Sciezka do obrazu USB Mass Storage | brak (wymagane) | `net_mode.sh`, `usb_mode.sh` (legacy) |
-| `CNC_MOUNT_POINT` | Punkt montowania obrazu (upload G-code) | brak (wymagane) | `net_mode.sh`, `usb_mode.sh` (legacy) |
-| `CNC_UPLOAD_DIR` | Katalog uploadu z WebUI | brak (wymagane) | `webui/app.py` |
+| `CNC_SHADOW_ENABLED` | Flaga trybu SHADOW (ustaw `true`) | `false` | `webui/app.py`, `tools/cnc_selftest.sh` |
+| `CNC_MASTER_DIR` | Katalog roboczy SHADOW (zrodlo plikow) | `/var/lib/cnc-control/master` | `shadow/watcher_service.py`, `shadow/rebuild_engine.py` |
+| `CNC_USB_IMG_A` | Sciezka obrazu USB dla slotu A | `/var/lib/cnc-control/cnc_usb_a.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_USB_IMG_B` | Sciezka obrazu USB dla slotu B | `/var/lib/cnc-control/cnc_usb_b.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_UPLOAD_DIR` | Katalog uploadu z WebUI | brak (wymagane) | `webui/app.py`, `tools/cnc_selftest.sh` |
 
 Pozostale zmienne (opcjonalne):
 
 | Zmienna | Opis | Domyslna wartosc | Uzycie |
 |---|---|---|---|
-| `CNC_NET_MODE_SCRIPT` | Sciezka do skryptu trybu sieciowego (legacy) | `<repo>/net_mode.sh` | `webui/app.py` |
-| `CNC_USB_MODE_SCRIPT` | Sciezka do skryptu trybu USB (legacy) | `<repo>/usb_mode.sh` | `webui/app.py` |
 | `CNC_CONTROL_REPO` | Sciezka do repo (dla `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
 | `CNC_WEBUI_LOG` | Sciezka do pliku logu webui | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | Nazwa unita systemd dla webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Zakres czasu dla `journalctl` (np. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
 | `CNC_AP_BLOCK_FLAG` | Sciezka pliku tymczasowej blokady AP | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
 | `CNC_AP_ENABLED` | Globalny przelacznik AP (`true`/`false`) | `false` | `webui/app.py` |
-| `CNC_USB_LABEL` | Etykieta woluminu FAT widoczna na hoście USB (max 11 znakow) | `CNC_USB` | `net_mode.sh`, `usb_mode.sh`, `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
-| `CNC_USB_MOUNT` | Legacy: punkt montowania USB | brak | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_USB_LABEL` | Etykieta woluminu FAT widoczna na hoście USB (max 11 znakow) | `CNC_USB` | `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
+| `CNC_ACTIVE_SLOT_FILE` | Plik aktywnego slotu (`A`/`B`) | `/var/lib/cnc-control/shadow_active_slot.state` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_SHADOW_STATE_FILE` | Plik stanu SHADOW (JSON) | `/var/lib/cnc-control/shadow_state.json` | `shadow/state_store.py`, `webui/app.py` |
+| `CNC_SHADOW_HISTORY_FILE` | Plik historii przebudow SHADOW | `/var/lib/cnc-control/shadow_history.json` | `shadow/shadow_manager.py`, `webui/app.py` |
+| `CNC_SHADOW_LOCK_FILE` | Sciezka locka przebudowy SHADOW | `/var/run/cnc-shadow.lock` | `shadow/lock_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_SHADOW_DEBOUNCE_SECONDS` | Opoznienie laczenia zdarzen watchera | `4` | `shadow/shadow_manager.py` |
+| `CNC_SHADOW_SLOT_SIZE_MB` | Rozmiar slotu obrazu USB | `256` | `shadow/rebuild_engine.py` |
+| `CNC_SHADOW_TMP_SUFFIX` | Sufiks pliku tymczasowego przebudowy | `.tmp` | `shadow/rebuild_engine.py`, `shadow/slot_manager.py` |
+| `CNC_SHADOW_HISTORY_LIMIT` | Limit wpisow historii przebudow | `50` | `shadow/shadow_manager.py` |
 
 ---
 
@@ -320,11 +316,8 @@ cnc-control/
 ├── config/
 ├── led_status.py
 ├── led_status_cli.py
-├── net_mode.sh
 ├── status.sh
-├── usb_mode.sh
 ├── tools/
-│   ├── setup_commands.sh
 │   ├── setup_led_service.sh
 │   ├── setup_usb_service.sh
 │   ├── setup_webui.sh
@@ -346,13 +339,10 @@ cnc-control/
 | `config/cnc-control.env.example` | Przykklad centralnej konfiguracji (EnvironmentFile). |
 | `led_status.py` | Demon LED WS2812 (GPIO18) monitorujacy IPC i sterujacy stanem LED. |
 | `led_status_cli.py` | CLI do zapisu trybu LED przez IPC (`/tmp/cnc_led_mode`). |
-| `net_mode.sh` | Legacy: przełączanie trybu sieciowego (host/gadget). |
 | `status.sh` | Szybki podgląd stanu systemu/połączeń. |
-| `usb_mode.sh` | Legacy: przełączanie trybu USB dla Raspberry Pi. |
 | `tools/` | Skrypty pomocnicze do konfiguracji środowiska. |
-| `tools/setup_commands.sh` | Instalacja komend skrótowych (`usb_mode` i `net_mode` jako legacy) oraz `status`. |
 | `tools/setup_led_service.sh` | Konfiguracja usługi `cnc-led.service` dla `led_status.py`. |
-| `tools/setup_usb_service.sh` | Konfiguracja usługi `cnc-usb.service` dla `usb_mode.sh`. |
+| `tools/setup_usb_service.sh` | Konfiguracja usługi `cnc-usb.service` dla eksportu SHADOW. |
 | `tools/setup_webui.sh` | Konfiguracja usługi `cnc-webui.service` dla webui. |
 | `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |
 | `tools/setup_zerotier.sh` | Konfiguracja klienta ZeroTier. |

@@ -85,3 +85,14 @@ def test_runner_validate_args_rejects_missing_usb_host_mount_path() -> None:
     )
     errors = test_runner.validate_args(args)
     assert any(error.startswith("USB host mount path does not exist:") for error in errors)
+
+
+def test_runner_validate_args_shadow_mode_does_not_require_smb_share() -> None:
+    args = argparse.Namespace(
+        mode="shadow",
+        smb_share=None,
+        usb_host_mount=None,
+        usb_host_read_timeout=25,
+    )
+    errors = test_runner.validate_args(args)
+    assert errors == []

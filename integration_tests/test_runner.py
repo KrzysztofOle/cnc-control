@@ -189,6 +189,7 @@ class Runner:
         self.mount_point: str | None = None
         self.udc_name: str | None = None
         self.shadow_enabled = False
+        self.shadow_master_dir: str | None = None
         self.webui_url = (args.webui_url or f"http://{args.host}:8080").rstrip("/")
         run_stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         self.run_prefix = f"it_{run_stamp}_{Path.cwd().name}"
@@ -233,12 +234,20 @@ class Runner:
             "usb": [("phase_3_usb", self.phase_3_usb)],
             "sync": [("phase_4_sync_net_to_usb", self.phase_4_sync_net_to_usb)],
             "perf": [("phase_5_performance", self.phase_5_performance)],
+            "shadow": [
+                ("phase_shadow_1_watcher", self.phase_shadow_1_watcher),
+                ("phase_shadow_2_sync_files", self.phase_shadow_2_sync_files),
+                ("phase_shadow_3_gcode_runtime", self.phase_shadow_3_gcode_runtime),
+            ],
             "all": [
                 ("phase_1_net_webui", self.phase_1_net_webui),
                 ("phase_2_smb", self.phase_2_smb),
                 ("phase_3_usb", self.phase_3_usb),
                 ("phase_4_sync_net_to_usb", self.phase_4_sync_net_to_usb),
                 ("phase_5_performance", self.phase_5_performance),
+                ("phase_shadow_1_watcher", self.phase_shadow_1_watcher),
+                ("phase_shadow_2_sync_files", self.phase_shadow_2_sync_files),
+                ("phase_shadow_3_gcode_runtime", self.phase_shadow_3_gcode_runtime),
             ],
         }
         return phase_map[mode]
@@ -326,6 +335,9 @@ class Runner:
         self.shadow_enabled = shadow_from_env in {"1", "true", "yes", "on"}
         if str(api_status.get("mode") or "").upper() == "SHADOW":
             self.shadow_enabled = True
+        self.shadow_master_dir = env_payload.get("CNC_MASTER_DIR") or "/var/lib/cnc-control/master"
+        if self.shadow_enabled:
+            self.upload_dir = self.shadow_master_dir
 
         return {
             "ssh": {
@@ -339,6 +351,7 @@ class Runner:
                 "upload_dir": self.upload_dir,
                 "mount_point": self.mount_point,
                 "shadow_enabled": env_payload.get("CNC_SHADOW_ENABLED"),
+                "shadow_master_dir": self.shadow_master_dir,
             },
             "status_sh": {
                 "mode": status_mode,
@@ -1209,6 +1222,193 @@ class Runner:
 
         return details
 
+    def phase_shadow_1_watcher(self) -> dict[str, Any]:
+        if not self.shadow_enabled:
+            raise SkipPhaseError("Tryb SHADOW nieaktywny - faza watchera SHADOW pominięta.")
+
+        started = time.perf_counter()
+        before_snapshot = self.fetch_shadow_snapshot()
+
+        file_name = f"{self.run_prefix}_shadow_watch_probe.nc"
+        local_file = self.create_local_file(
+            file_name,
+            [
+                "%",
+                "(SHADOW watcher probe)",
+                "G21",
+                "G90",
+                "G0 X10 Y10",
+                "M30",
+                "%",
+            ],
+        )
+        self.upload_file_via_webui(local_file)
+        wait_result = self.wait_for_shadow_rebuild(
+            previous_run_id=before_snapshot["run_id"],
+            expected_trigger="watch",
+            timeout_seconds=self.args.switch_timeout,
+        )
+        duration = round(time.perf_counter() - started, 6)
+        self.measurements["shadow_watcher_seconds"] = duration
+
+        return {
+            "file": file_name,
+            "before": before_snapshot,
+            "after": wait_result["snapshot"],
+            "history_entry": wait_result["history_entry"],
+            "duration_seconds": duration,
+        }
+
+    def phase_shadow_2_sync_files(self) -> dict[str, Any]:
+        if not self.shadow_enabled:
+            raise SkipPhaseError("Tryb SHADOW nieaktywny - faza synchronizacji SHADOW pominięta.")
+        if not self.shadow_master_dir:
+            raise RuntimeError("Brak katalogu CNC_MASTER_DIR dla fazy synchronizacji SHADOW.")
+
+        started = time.perf_counter()
+        before_snapshot = self.fetch_shadow_snapshot()
+
+        file_names: list[str] = []
+        for index in range(1, 4):
+            file_name = f"{self.run_prefix}_shadow_sync_probe_{index:02d}.nc"
+            local_file = self.create_local_file(
+                file_name,
+                [
+                    "%",
+                    f"(SHADOW sync probe {index})",
+                    "G21",
+                    "G90",
+                    f"G1 X{index * 3} Y{index * 5} F900",
+                    "M30",
+                    "%",
+                ],
+            )
+            self.upload_file_via_webui(local_file)
+            file_names.append(file_name)
+
+        wait_result = self.wait_for_shadow_rebuild(
+            previous_run_id=before_snapshot["run_id"],
+            expected_trigger="watch",
+            timeout_seconds=self.args.switch_timeout,
+        )
+
+        runtime_mapping = self.read_shadow_runtime_mapping()
+        expected_image_path = runtime_mapping["expected_image_path"]
+        runtime_lun_path = runtime_mapping["runtime_lun_path"]
+        if runtime_lun_path != expected_image_path:
+            raise RuntimeError(
+                "Niezgodnosc runtime LUN i aktywnego slotu SHADOW: "
+                f"runtime={runtime_lun_path}, expected={expected_image_path}"
+            )
+
+        master_checksums = self.remote_checksums_for_directory(
+            self.shadow_master_dir,
+            file_names,
+        )
+        if set(master_checksums) != set(file_names):
+            raise RuntimeError(
+                "Brak pelnych checksum dla katalogu SHADOW master: "
+                f"expected={sorted(file_names)}, got={sorted(master_checksums)}"
+            )
+
+        image_payload = self.shadow_image_checksums(expected_image_path, file_names)
+        image_checksums = image_payload["checksums"]
+        if set(image_checksums) != set(file_names):
+            raise RuntimeError(
+                "Brak pelnych checksum dla obrazu SHADOW slotu aktywnego: "
+                f"expected={sorted(file_names)}, got={sorted(image_checksums)}"
+            )
+        if image_checksums != master_checksums:
+            raise RuntimeError(
+                "Niezgodnosc synchronizacji SHADOW (master vs slot aktywny): "
+                f"master={master_checksums}, image={image_checksums}, errors={image_payload['errors']}"
+            )
+
+        duration = round(time.perf_counter() - started, 6)
+        self.measurements["shadow_sync_seconds"] = duration
+
+        return {
+            "files": file_names,
+            "before": before_snapshot,
+            "after": wait_result["snapshot"],
+            "history_entry": wait_result["history_entry"],
+            "runtime_mapping": runtime_mapping,
+            "checksums_master": master_checksums,
+            "checksums_active_slot": image_checksums,
+            "duration_seconds": duration,
+        }
+
+    def phase_shadow_3_gcode_runtime(self) -> dict[str, Any]:
+        if not self.shadow_enabled:
+            raise SkipPhaseError("Tryb SHADOW nieaktywny - faza G-code SHADOW pominięta.")
+
+        started = time.perf_counter()
+        before_snapshot = self.fetch_shadow_snapshot()
+
+        file_name = f"{self.run_prefix}_shadow_runtime_gcode.nc"
+        local_file = self.create_local_file(
+            file_name,
+            [
+                "%",
+                "(SHADOW runtime G-code probe)",
+                "G21",
+                "G90",
+                "G0 X0 Y0",
+                "G1 X12.5 Y8.5 F1200",
+                "M30",
+                "%",
+            ],
+        )
+        expected_sha256 = sha256_file(local_file)
+        self.upload_file_via_webui(local_file)
+
+        wait_result = self.wait_for_shadow_rebuild(
+            previous_run_id=before_snapshot["run_id"],
+            expected_trigger="watch",
+            timeout_seconds=self.args.switch_timeout,
+        )
+
+        runtime_mapping = self.read_shadow_runtime_mapping()
+        expected_image_path = runtime_mapping["expected_image_path"]
+        runtime_lun_path = runtime_mapping["runtime_lun_path"]
+        if runtime_lun_path != expected_image_path:
+            raise RuntimeError(
+                "Plik G-code nie jest eksponowany z aktywnego slotu SHADOW: "
+                f"runtime={runtime_lun_path}, expected={expected_image_path}"
+            )
+
+        image_payload = self.shadow_image_checksums(runtime_lun_path, [file_name])
+        image_checksums = image_payload["checksums"]
+        observed_sha256 = image_checksums.get(file_name)
+        if observed_sha256 != expected_sha256:
+            raise RuntimeError(
+                "Niezgodnosc G-code w runtime LUN SHADOW: "
+                f"expected={expected_sha256}, observed={observed_sha256}, "
+                f"errors={image_payload['errors']}"
+            )
+
+        host_read: dict[str, Any] = {
+            "enabled": bool(self.args.usb_host_mount),
+            "reason": "usb_host_mount_not_set" if not self.args.usb_host_mount else "",
+        }
+        if self.args.usb_host_mount:
+            host_read = self.wait_for_usb_host_shadow_file(file_name, expected_sha256)
+
+        duration = round(time.perf_counter() - started, 6)
+        self.measurements["shadow_gcode_runtime_seconds"] = duration
+
+        return {
+            "file": file_name,
+            "expected_sha256": expected_sha256,
+            "observed_sha256": observed_sha256,
+            "before": before_snapshot,
+            "after": wait_result["snapshot"],
+            "history_entry": wait_result["history_entry"],
+            "runtime_mapping": runtime_mapping,
+            "usb_host_read": host_read,
+            "duration_seconds": duration,
+        }
+
     def phase_6_cleanup(self) -> dict[str, Any]:
         errors: list[str] = []
         details: dict[str, Any] = {
@@ -1371,6 +1571,111 @@ class Runner:
         if not isinstance(payload, dict):
             raise RuntimeError("Nieprawidłowa odpowiedź JSON z /api/status.")
         return payload
+
+    def fetch_shadow_history(self, limit: int = 20) -> list[dict[str, Any]]:
+        self.ensure_requests_session()
+        assert self.session is not None
+
+        response = self.session.get(
+            urljoin(self.webui_url + "/", "api/shadow/history"),
+            params={"limit": str(limit)},
+            timeout=self.args.http_timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Nieprawidłowa odpowiedź JSON z /api/shadow/history.")
+        history = payload.get("history")
+        if not isinstance(history, list):
+            raise RuntimeError("Brak listy history w odpowiedzi /api/shadow/history.")
+        return [entry for entry in history if isinstance(entry, dict)]
+
+    def fetch_shadow_snapshot(self) -> dict[str, Any]:
+        payload = self.fetch_api_status()
+        mode = str(payload.get("mode") or "").upper()
+        if mode != "SHADOW":
+            raise RuntimeError(f"Oczekiwano trybu SHADOW, otrzymano: {mode or 'UNKNOWN'}")
+        shadow_state = payload.get("shadow_state")
+        if not isinstance(shadow_state, dict):
+            raise RuntimeError("Brak shadow_state w odpowiedzi /api/status.")
+        try:
+            run_id = int(shadow_state.get("run_id", 0))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Nieprawidłowy run_id w shadow_state: {shadow_state.get('run_id')}"
+            ) from exc
+        fsm_state = str(shadow_state.get("fsm_state") or "UNKNOWN").upper()
+        return {
+            "mode": mode,
+            "run_id": run_id,
+            "fsm_state": fsm_state,
+            "shadow_state": shadow_state,
+            "switching": bool(payload.get("switching")),
+            "api_status": payload,
+        }
+
+    def wait_for_shadow_rebuild(
+        self,
+        *,
+        previous_run_id: int,
+        expected_trigger: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_seconds
+        poll_interval = 1.5
+        expected_trigger_norm = expected_trigger.strip().casefold()
+        last_snapshot: dict[str, Any] | None = None
+        last_history: list[dict[str, Any]] = []
+
+        while time.monotonic() < deadline:
+            snapshot = self.fetch_shadow_snapshot()
+            last_snapshot = snapshot
+            try:
+                history = self.fetch_shadow_history(limit=20)
+            except Exception:
+                history = []
+            last_history = history
+
+            candidate_entry: dict[str, Any] | None = None
+            candidate_run_id = -1
+            for entry in history:
+                trigger = str(entry.get("trigger") or "").casefold()
+                if trigger != expected_trigger_norm:
+                    continue
+                try:
+                    run_id = int(entry.get("run_id", -1))
+                except (TypeError, ValueError):
+                    continue
+                if run_id <= previous_run_id:
+                    continue
+                if run_id > candidate_run_id:
+                    candidate_run_id = run_id
+                    candidate_entry = entry
+
+            if candidate_entry is not None:
+                entry_result = str(candidate_entry.get("result") or "").casefold()
+                if entry_result != "ok":
+                    raise RuntimeError(
+                        "SHADOW rebuild zakonczony bledem: "
+                        f"trigger={expected_trigger}, entry={candidate_entry}"
+                    )
+                if (
+                    snapshot["run_id"] >= candidate_run_id
+                    and snapshot["fsm_state"] == "READY"
+                ):
+                    return {
+                        "snapshot": snapshot,
+                        "history_entry": candidate_entry,
+                    }
+
+            time.sleep(poll_interval)
+
+        history_preview = [entry for entry in last_history[:3]]
+        raise RuntimeError(
+            "Timeout oczekiwania na rebuild SHADOW "
+            f"(trigger={expected_trigger}, previous_run_id={previous_run_id}, "
+            f"last_snapshot={last_snapshot}, history_preview={history_preview})"
+        )
 
     def extract_redirect_message(self, response: Any) -> str:
         location = response.headers.get("Location", "")
@@ -1554,7 +1859,14 @@ class Runner:
         return [str(item) for item in parsed]
 
     def remote_checksums(self, names: list[str]) -> dict[str, str]:
-        if not self.upload_dir:
+        return self.remote_checksums_for_directory(self.upload_dir, names)
+
+    def remote_checksums_for_directory(
+        self,
+        directory: str | None,
+        names: list[str],
+    ) -> dict[str, str]:
+        if not directory:
             return {}
         wanted_literal = repr(sorted(names))
         script = (
@@ -1562,7 +1874,7 @@ class Runner:
             "import hashlib\n"
             "import json\n"
             "from pathlib import Path\n"
-            f"root = Path({self.upload_dir!r})\n"
+            f"root = Path({directory!r})\n"
             f"wanted = set({wanted_literal})\n"
             "payload = {}\n"
             "if root.is_dir():\n"
@@ -1581,6 +1893,168 @@ class Runner:
         if not isinstance(parsed, dict):
             raise RuntimeError("Nieprawidłowy JSON checksum z RPi.")
         return {str(k): str(v) for k, v in parsed.items()}
+
+    def read_shadow_runtime_mapping(self) -> dict[str, str]:
+        env_payload = self.remote_env or self.read_remote_env()
+        slot_file = env_payload.get("CNC_ACTIVE_SLOT_FILE") or "/var/lib/cnc-control/shadow_active_slot.state"
+        image_a = env_payload.get("CNC_USB_IMG_A") or "/var/lib/cnc-control/cnc_usb_a.img"
+        image_b = env_payload.get("CNC_USB_IMG_B") or "/var/lib/cnc-control/cnc_usb_b.img"
+
+        script = (
+            "python3 - <<'PY'\n"
+            "import json\n"
+            "from pathlib import Path\n"
+            f"slot_file = Path({slot_file!r})\n"
+            f"image_a = {image_a!r}\n"
+            f"image_b = {image_b!r}\n"
+            "runtime_file = Path('/sys/module/g_mass_storage/parameters/file')\n"
+            "slot_raw = ''\n"
+            "if slot_file.exists():\n"
+            "    slot_raw = slot_file.read_text(encoding='utf-8', errors='replace').strip()\n"
+            "slot = slot_raw.upper()\n"
+            "if slot == 'A':\n"
+            "    expected = image_a\n"
+            "elif slot == 'B':\n"
+            "    expected = image_b\n"
+            "else:\n"
+            "    expected = ''\n"
+            "runtime = ''\n"
+            "if runtime_file.exists():\n"
+            "    runtime = runtime_file.read_text(encoding='utf-8', errors='replace').strip()\n"
+            "print(json.dumps({\n"
+            "    'slot_file': str(slot_file),\n"
+            "    'active_slot': slot,\n"
+            "    'image_a': image_a,\n"
+            "    'image_b': image_b,\n"
+            "    'expected_image_path': expected,\n"
+            "    'runtime_lun_path': runtime,\n"
+            "}, ensure_ascii=True))\n"
+            "PY"
+        )
+        result = self.ssh_exec(script, check=True)
+        payload = json.loads(result["stdout"] or "{}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Nieprawidlowy JSON mapowania runtime SHADOW.")
+        active_slot = str(payload.get("active_slot") or "")
+        expected_path = str(payload.get("expected_image_path") or "")
+        runtime_path = str(payload.get("runtime_lun_path") or "")
+        if active_slot not in {"A", "B"}:
+            raise RuntimeError(f"Nieprawidlowa wartosc aktywnego slotu SHADOW: {active_slot!r}")
+        if not expected_path:
+            raise RuntimeError("Brak expected_image_path dla aktywnego slotu SHADOW.")
+        if not runtime_path:
+            raise RuntimeError("Brak runtime_lun_path dla SHADOW.")
+        return {
+            "slot_file": str(payload.get("slot_file") or slot_file),
+            "active_slot": active_slot,
+            "image_a": str(payload.get("image_a") or image_a),
+            "image_b": str(payload.get("image_b") or image_b),
+            "expected_image_path": expected_path,
+            "runtime_lun_path": runtime_path,
+        }
+
+    def shadow_image_checksums(self, image_path: str, names: list[str]) -> dict[str, dict[str, str]]:
+        files_literal = repr(sorted(names))
+        script = (
+            "python3 - <<'PY'\n"
+            "import hashlib\n"
+            "import json\n"
+            "import os\n"
+            "import subprocess\n"
+            "import tempfile\n"
+            f"image_path = {image_path!r}\n"
+            f"names = {files_literal}\n"
+            "checksums = {}\n"
+            "errors = {}\n"
+            "for name in names:\n"
+            "    temp_path = ''\n"
+            "    try:\n"
+            "        with tempfile.NamedTemporaryFile(prefix='cnc-shadow-', delete=False) as tmp:\n"
+            "            temp_path = tmp.name\n"
+            "        result = subprocess.run(\n"
+            "            ['mcopy', '-n', '-i', image_path, f'::{name}', temp_path],\n"
+            "            capture_output=True,\n"
+            "            text=True,\n"
+            "            check=False,\n"
+            "        )\n"
+            "        if result.returncode != 0:\n"
+            "            detail = (result.stderr or result.stdout or '').strip()\n"
+            "            errors[name] = detail or f'mcopy rc={result.returncode}'\n"
+            "            continue\n"
+            "        digest = hashlib.sha256()\n"
+            "        with open(temp_path, 'rb') as handle:\n"
+            "            while True:\n"
+            "                chunk = handle.read(1024 * 1024)\n"
+            "                if not chunk:\n"
+            "                    break\n"
+            "                digest.update(chunk)\n"
+            "        checksums[name] = digest.hexdigest()\n"
+            "    finally:\n"
+            "        if temp_path and os.path.exists(temp_path):\n"
+            "            os.unlink(temp_path)\n"
+            "print(json.dumps({'checksums': checksums, 'errors': errors}, ensure_ascii=True, sort_keys=True))\n"
+            "PY"
+        )
+        result = self.ssh_exec(script, check=True)
+        payload = json.loads(result["stdout"] or "{}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Nieprawidlowy JSON checksum obrazu SHADOW.")
+        raw_checksums = payload.get("checksums")
+        raw_errors = payload.get("errors")
+        if not isinstance(raw_checksums, dict) or not isinstance(raw_errors, dict):
+            raise RuntimeError("Brak map checksums/errors w odpowiedzi checksum obrazu SHADOW.")
+        checksums = {str(name): str(value) for name, value in raw_checksums.items()}
+        errors = {str(name): str(value) for name, value in raw_errors.items()}
+        return {
+            "checksums": checksums,
+            "errors": errors,
+        }
+
+    def wait_for_usb_host_shadow_file(self, file_name: str, expected_sha256: str) -> dict[str, Any]:
+        if not self.args.usb_host_mount:
+            raise RuntimeError("Brak --usb-host-mount dla testu runtime SHADOW.")
+
+        host_mount = Path(self.args.usb_host_mount).expanduser()
+        if not host_mount.exists() or not host_mount.is_dir():
+            raise RuntimeError(
+                f"Nieprawidlowy --usb-host-mount: {host_mount} (wymagany istniejacy katalog)."
+            )
+
+        probe_path = host_mount / file_name
+        started = time.monotonic()
+        deadline = started + self.args.usb_host_read_timeout
+        while time.monotonic() < deadline:
+            if probe_path.is_file():
+                break
+            time.sleep(0.5)
+
+        if not probe_path.is_file():
+            preview_entries = sorted(
+                [entry.name for entry in host_mount.iterdir() if not entry.name.startswith(".")],
+                key=str.casefold,
+            )[:20]
+            raise RuntimeError(
+                "Plik G-code SHADOW nie jest widoczny po stronie hosta USB "
+                f"w czasie {self.args.usb_host_read_timeout}s: {probe_path}; "
+                f"entries_preview={preview_entries}"
+            )
+
+        observed_sha256 = sha256_file(probe_path)
+        if observed_sha256 != expected_sha256:
+            raise RuntimeError(
+                "Niezgodnosc SHA256 dla G-code SHADOW po stronie hosta USB: "
+                f"expected={expected_sha256}, observed={observed_sha256}, file={probe_path}"
+            )
+
+        return {
+            "enabled": True,
+            "host_mount": str(host_mount),
+            "file": file_name,
+            "path": str(probe_path),
+            "expected_sha256": expected_sha256,
+            "observed_sha256": observed_sha256,
+            "wait_seconds": round(time.monotonic() - started, 6),
+        }
 
     def run_sync_probe(
         self,
@@ -1684,6 +2158,7 @@ def parse_args() -> argparse.Namespace:
             "usb",
             "sync",
             "perf",
+            "shadow",
             "ssh",
         ),
         default="all",

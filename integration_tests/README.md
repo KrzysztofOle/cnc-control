@@ -11,6 +11,9 @@ Runner pokrywa:
 - SMB (zapis/usuwanie przez udział),
 - USB (walidacja trybu gadget + opcjonalny odczyt host-side),
 - NET->USB sync oraz pomiary czasowe.
+- SHADOW watcher (wykrywanie zmian i rebuild),
+- synchronizację plików SHADOW (master -> aktywny slot),
+- gotowość G-code w aktywnym runtime LUN SHADOW.
 
 ## Zasada uruchamiania na najnowszym kodzie
 
@@ -50,7 +53,8 @@ Jeśli którykolwiek krok powyżej zakończy się błędem, preflight kończy si
 - `usb`: preflight + `phase_3_usb` (z `--usb-host-mount` także bezpośredni odczyt pliku z hosta USB)
 - `sync`: preflight + `phase_4_sync_net_to_usb`
 - `perf`: preflight + `phase_5_performance`
-- `all`: preflight + wszystkie fazy funkcjonalne (`1..5`)
+- `shadow`: preflight + fazy SHADOW (`phase_shadow_1_watcher`, `phase_shadow_2_sync_files`, `phase_shadow_3_gcode_runtime`)
+- `all`: preflight + wszystkie fazy funkcjonalne (`1..5` + fazy SHADOW)
 
 `phase_6_cleanup` uruchamia się zawsze na końcu.
 
