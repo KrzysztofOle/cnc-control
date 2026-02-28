@@ -212,6 +212,34 @@ get_env_value_or_default() {
     fi
 }
 
+get_samba_share_path() {
+    local conf_file="$1"
+    local share_name="${2:-cnc_usb}"
+
+    if [ ! -f "${conf_file}" ]; then
+        return 1
+    fi
+
+    awk -v share="${share_name}" '
+        BEGIN { in_share = 0 }
+        /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+            line = $0
+            gsub(/^[[:space:]]*\[/, "", line)
+            gsub(/\][[:space:]]*$/, "", line)
+            in_share = (tolower(line) == tolower(share))
+            next
+        }
+        in_share && /^[[:space:]]*path[[:space:]]*=/ {
+            line = $0
+            sub(/^[[:space:]]*path[[:space:]]*=[[:space:]]*/, "", line)
+            sub(/[[:space:]]*#.*/, "", line)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+            print line
+            exit 0
+        }
+    ' "${conf_file}"
+}
+
 is_true_value() {
     local raw="$1"
     local normalized=""
@@ -546,6 +574,7 @@ check_shadow() {
     local state_validation_rc=0
     local history_validation_output=""
     local history_validation_rc=0
+    local samba_path=""
 
     if [ ! -f "${ENV_FILE}" ]; then
         add_check "shadow" "WARN" "WARN" "Shadow checks available" "Missing ${ENV_FILE}"
@@ -566,6 +595,20 @@ check_shadow() {
         add_check "shadow" "CRITICAL" "PASS" "Katalog CNC_MASTER_DIR" "${master_dir}"
     else
         add_check "shadow" "CRITICAL" "FAIL" "Katalog CNC_MASTER_DIR" "Missing directory: ${master_dir}"
+    fi
+
+    if [ -f "/etc/samba/smb.conf" ]; then
+        samba_path="$(get_samba_share_path "/etc/samba/smb.conf" "cnc_usb" 2>/dev/null || true)"
+        samba_path="$(trim_string "${samba_path}")"
+        if [ -z "${samba_path}" ]; then
+            add_check "shadow" "WARN" "WARN" "Samba share cnc_usb path" "Nie znaleziono wpisu path w /etc/samba/smb.conf"
+        elif [ "${samba_path}" = "${master_dir}" ]; then
+            add_check "shadow" "WARN" "PASS" "Samba share cnc_usb path" "${samba_path} (zgodne z CNC_MASTER_DIR)"
+        else
+            add_check "shadow" "WARN" "WARN" "Samba share cnc_usb path" "${samba_path} (oczekiwane: ${master_dir})"
+        fi
+    else
+        add_check "shadow" "WARN" "WARN" "Samba share cnc_usb path" "Brak /etc/samba/smb.conf"
     fi
 
     image_a="$(get_env_value_or_default "${ENV_FILE}" "CNC_USB_IMG_A" "/var/lib/cnc-control/cnc_usb_a.img")"

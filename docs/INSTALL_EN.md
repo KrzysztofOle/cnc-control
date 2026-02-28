@@ -134,7 +134,9 @@ Samba is intentionally configured in a minimal mode:
 - `nmbd.service` (NetBIOS) is disabled.
 - `samba-ad-dc.service` is not used (Raspberry Pi is not a domain controller).
 - The server runs as a **standalone file server** and listens only on port 445.
-- The shared path is `/mnt/cnc_usb` (share name `cnc_usb`).
+- The `cnc_usb` share path is:
+  - `CNC_MASTER_DIR` when `CNC_SHADOW_ENABLED=true` (aligned with WebUI),
+  - `CNC_UPLOAD_DIR` (or `CNC_MOUNT_POINT` fallback) outside SHADOW mode.
 
 ### Why smbd only?
 

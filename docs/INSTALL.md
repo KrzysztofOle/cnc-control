@@ -135,7 +135,9 @@ Konfiguracja Samby w tym projekcie jest celowo uproszczona:
 - `nmbd.service` (NetBIOS) jest wyłączony.
 - `samba-ad-dc.service` nie jest używany (Raspberry Pi nie jest kontrolerem domeny).
 - Serwer działa w trybie **standalone file server** i nasluchuje tylko na porcie 445.
-- Udostepniany katalog to `/mnt/cnc_usb` (udzial `cnc_usb`).
+- Udzial `cnc_usb` wskazuje:
+  - `CNC_MASTER_DIR` gdy `CNC_SHADOW_ENABLED=true` (spojnie z WebUI),
+  - `CNC_UPLOAD_DIR` (lub fallback `CNC_MOUNT_POINT`) poza trybem SHADOW.
 
 ### Dlaczego tylko smbd?
 

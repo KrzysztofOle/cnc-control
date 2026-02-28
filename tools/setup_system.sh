@@ -30,7 +30,9 @@ OVERRIDE_DIR="/etc/systemd/system/cnc-webui.service.d"
 OVERRIDE_FILE="${OVERRIDE_DIR}/override.conf"
 SAMBA_CONF="/etc/samba/smb.conf"
 SAMBA_SHARE_NAME="cnc_usb"
-SAMBA_SHARE_PATH="/mnt/cnc_usb"
+SAMBA_SHARE_PATH_DEFAULT="/mnt/cnc_usb"
+SAMBA_SHARE_PATH="${SAMBA_SHARE_PATH_DEFAULT}"
+SHADOW_MASTER_DIR_DEFAULT="/var/lib/cnc-control/master"
 CLOUD_INIT_UNITS=(
     cloud-init-local.service
     cloud-init.service
@@ -105,6 +107,40 @@ upsert_env_var() {
     else
         printf '\n%s=%s\n' "${key}" "${value}" >> "${env_file}"
     fi
+}
+
+is_true_value() {
+    local raw="${1:-}"
+    local normalized=""
+
+    normalized="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+    case "${normalized}" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+resolve_samba_share_path() {
+    local share_path=""
+    local shadow_master_dir="${CNC_MASTER_DIR:-${SHADOW_MASTER_DIR_DEFAULT}}"
+    local upload_dir="${CNC_UPLOAD_DIR:-}"
+    local mount_point="${CNC_MOUNT_POINT:-}"
+
+    if is_true_value "${CNC_SHADOW_ENABLED:-false}"; then
+        share_path="${shadow_master_dir}"
+    elif [ -n "${upload_dir}" ]; then
+        share_path="${upload_dir}"
+    elif [ -n "${mount_point}" ]; then
+        share_path="${mount_point}"
+    else
+        share_path="${SAMBA_SHARE_PATH_DEFAULT}"
+    fi
+
+    printf '%s' "${share_path}"
 }
 
 has_dwc2_overlay_in_all_section() {
@@ -309,7 +345,7 @@ fi
 
 configure_usb_otg_dwc2
 
-mkdir -p /etc/cnc-control /var/lib/cnc-control "${SAMBA_SHARE_PATH}"
+mkdir -p /etc/cnc-control /var/lib/cnc-control
 
 if [ ! -f "${ENV_DEST}" ]; then
     install -o root -g root -m 644 "${ENV_SRC}" "${ENV_DEST}"
@@ -324,12 +360,18 @@ set -a
 source "${ENV_DEST}"
 set +a
 
+SAMBA_SHARE_PATH="$(resolve_samba_share_path)"
+echo "[INFO] Samba share path: ${SAMBA_SHARE_PATH}"
+mkdir -p "${SAMBA_SHARE_PATH}"
+
 chown root:root /var/lib/cnc-control
 chmod 755 /var/lib/cnc-control
 
 create_usb_image_if_missing
 
-if mountpoint -q "${SAMBA_SHARE_PATH}"; then
+if is_true_value "${CNC_SHADOW_ENABLED:-false}"; then
+    echo "[INFO] SHADOW wlaczony - pozostawiam wlasciciela i uprawnienia: ${SAMBA_SHARE_PATH}"
+elif mountpoint -q "${SAMBA_SHARE_PATH}"; then
     echo "[INFO] ${SAMBA_SHARE_PATH} jest zamontowany – pomijam chown"
 else
     chown root:root "${SAMBA_SHARE_PATH}"
@@ -433,7 +475,9 @@ if command -v smbd >/dev/null 2>&1; then
    directory mask = 0775
 SMB
 
-    if getent group sambashare >/dev/null 2>&1; then
+    if is_true_value "${CNC_SHADOW_ENABLED:-false}"; then
+        echo "[INFO] SHADOW wlaczony - pomijam wymuszanie uprawnien Samby dla ${SAMBA_SHARE_PATH}"
+    elif getent group sambashare >/dev/null 2>&1; then
         chgrp sambashare "${SAMBA_SHARE_PATH}"
         chmod 2775 "${SAMBA_SHARE_PATH}"
     else
