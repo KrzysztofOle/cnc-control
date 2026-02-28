@@ -881,6 +881,26 @@ body.ui-busy #loading-overlay * {
     if (!button || button.disabled || busy) {
       return;
     }
+    async function waitForGuiAfterRestart() {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+          const probe = await fetch("/api/status", {
+            method: "GET",
+            cache: "no-store",
+            credentials: "same-origin",
+          });
+          if (probe.ok) {
+            window.location.reload();
+            return;
+          }
+        } catch (error) {
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      setBusy(false);
+      alert("GUI nie odpowiada po restarcie.");
+    }
+
     setBusy(true, "Restarting GUI…");
     try {
       const response = await fetch("/api/restart-gui", {
@@ -901,10 +921,18 @@ body.ui-busy #loading-overlay * {
         }
         throw new Error(message);
       }
-      setTimeout(() => {
-        window.location.reload();
-      }, 5000);
+      await waitForGuiAfterRestart();
     } catch (error) {
+      const rawMessage = String(error && error.message ? error.message : "");
+      const networkRestartError =
+        rawMessage.includes("Failed to fetch") ||
+        rawMessage.includes("NetworkError") ||
+        rawMessage.includes("Load failed") ||
+        rawMessage.includes("Empty reply");
+      if (networkRestartError) {
+        await waitForGuiAfterRestart();
+        return;
+      }
       setBusy(false);
       alert(error.message || "Nie udało się zrestartować GUI.");
     }
