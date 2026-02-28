@@ -2332,6 +2332,49 @@ def run_systemctl_command(args, timeout=10):
     return result, None
 
 
+def is_systemctl_permission_error(result):
+    detail = f"{result.stderr or ''}\n{result.stdout or ''}".casefold()
+    markers = (
+        "interactive authentication required",
+        "authentication is required",
+        "access denied",
+        "permission denied",
+        "org.freedesktop.policykit1",
+    )
+    return any(marker in detail for marker in markers)
+
+
+def restart_systemd_unit(unit_name, timeout=10):
+    commands = [["systemctl", "--no-block", "restart", unit_name]]
+    if shutil.which("sudo"):
+        commands.append(["sudo", "-n", "systemctl", "--no-block", "restart", unit_name])
+
+    last_result = None
+    for index, command in enumerate(commands):
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "Timeout restartu GUI"
+        except OSError:
+            if index == len(commands) - 1:
+                return None, "Nie można uruchomić systemctl"
+            continue
+
+        last_result = result
+        if result.returncode == 0:
+            return result, None
+        if index == 0 and len(commands) > 1 and is_systemctl_permission_error(result):
+            continue
+        break
+    return last_result, None
+
+
 def parse_systemctl_state(value, true_value, false_values):
     if value == true_value:
         return True, None
@@ -2825,21 +2868,9 @@ def api_restart_gui():
         if mode != "NET":
             return jsonify({"error": "Nieznany tryb pracy"}), 500
 
-    if not shutil.which("systemctl"):
-        return jsonify({"error": "Brak systemctl"}), 500
-
-    try:
-        restart_result = subprocess.run(
-            ["systemctl", "restart", "cnc-webui.service"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Timeout restartu GUI"}), 500
-    except OSError:
-        return jsonify({"error": "Nie można uruchomić systemctl"}), 500
+    restart_result, restart_error = restart_systemd_unit(WEBUI_SYSTEMD_UNIT, timeout=10)
+    if restart_error:
+        return jsonify({"error": restart_error}), 500
 
     if restart_result.returncode != 0:
         detail = (restart_result.stderr or restart_result.stdout or "").strip()
