@@ -1081,6 +1081,9 @@ body.ui-busy #loading-overlay * {
     NET: "indicator--net",
     USB: "indicator--usb",
   };
+  let lastShadowRunId = null;
+  let shadowFileRefreshPending = false;
+  let shadowReloadInProgress = false;
 
   function applyMode(mode) {
     const label = MODE_LABELS[mode];
@@ -1165,6 +1168,52 @@ body.ui-busy #loading-overlay * {
         errorMessage.textContent = "";
         errorLine.style.display = "none";
       }
+    }
+  }
+
+  function shadowRunIdAsInt(shadowState) {
+    if (!shadowState || typeof shadowState !== "object" || !("run_id" in shadowState)) {
+      return null;
+    }
+    const value = Number.parseInt(String(shadowState.run_id), 10);
+    if (Number.isNaN(value)) {
+      return null;
+    }
+    return value;
+  }
+
+  function hasFileListUi() {
+    return Boolean(document.getElementById("delete-files-form"));
+  }
+
+  function maybeRefreshFileListFromShadowState(shadowState) {
+    if (!hasFileListUi()) {
+      return;
+    }
+    const runId = shadowRunIdAsInt(shadowState);
+    if (runId === null) {
+      return;
+    }
+
+    if (lastShadowRunId === null) {
+      lastShadowRunId = runId;
+      return;
+    }
+
+    if (runId !== lastShadowRunId) {
+      lastShadowRunId = runId;
+      shadowFileRefreshPending = true;
+    }
+
+    const fsmState = String(shadowState && shadowState.fsm_state ? shadowState.fsm_state : "").toUpperCase();
+    if (
+      shadowFileRefreshPending &&
+      !shadowReloadInProgress &&
+      !busy &&
+      (fsmState === "READY" || fsmState === "IDLE")
+    ) {
+      shadowReloadInProgress = true;
+      window.location.reload();
     }
   }
 
@@ -1377,6 +1426,7 @@ body.ui-busy #loading-overlay * {
       }
       if (payload && payload.shadow_state) {
         applyShadowState(payload.shadow_state);
+        maybeRefreshFileListFromShadowState(payload.shadow_state);
       }
       if (payload && "switching" in payload) {
         applySwitching(payload.switching);
