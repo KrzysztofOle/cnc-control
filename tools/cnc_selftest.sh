@@ -10,7 +10,8 @@ WARN_COUNT=0
 ENV_FILE="/etc/cnc-control/cnc-control.env"
 MIN_USB_IMAGE_SIZE_BYTES=1048576
 
-SECTIONS=("boot" "kernel" "gadget" "usb_image" "project_config" "shadow" "systemd" "hardware")
+SECTIONS=("boot" "kernel" "gadget" "usb_image" "project_config" "shadow" "samba" "systemd" "hardware")
+SAMBA_DEFAULT_SHARE_PATH="/mnt/cnc_usb"
 
 REPORT_STATUS=()
 REPORT_MESSAGE=()
@@ -50,8 +51,9 @@ section_index() {
         usb_image) printf '3' ;;
         project_config) printf '4' ;;
         shadow) printf '5' ;;
-        systemd) printf '6' ;;
-        hardware) printf '7' ;;
+        samba) printf '6' ;;
+        systemd) printf '7' ;;
+        hardware) printf '8' ;;
         *) printf '%s' "-1" ;;
     esac
 }
@@ -235,6 +237,44 @@ get_samba_share_path() {
             sub(/[[:space:]]*#.*/, "", line)
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
             print line
+            exit 0
+        }
+    ' "${conf_file}"
+}
+
+get_samba_option() {
+    local conf_file="$1"
+    local section_name="$2"
+    local option_name="$3"
+
+    if [ ! -f "${conf_file}" ]; then
+        return 1
+    fi
+
+    awk -v section="${section_name}" -v option="${option_name}" '
+        BEGIN { in_section = 0; target = tolower(option) }
+        /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+            line = $0
+            gsub(/^[[:space:]]*\[/, "", line)
+            gsub(/\][[:space:]]*$/, "", line)
+            in_section = (tolower(line) == tolower(section))
+            next
+        }
+        !in_section { next }
+        {
+            split($0, kv, "=")
+            if (length(kv) < 2) {
+                next
+            }
+            key = kv[1]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+            if (tolower(key) != target) {
+                next
+            }
+            value = substr($0, index($0, "=") + 1)
+            sub(/[[:space:]]*#.*/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            print value
             exit 0
         }
     ' "${conf_file}"
@@ -574,7 +614,6 @@ check_shadow() {
     local state_validation_rc=0
     local history_validation_output=""
     local history_validation_rc=0
-    local samba_path=""
 
     if [ ! -f "${ENV_FILE}" ]; then
         add_check "shadow" "WARN" "WARN" "Shadow checks available" "Missing ${ENV_FILE}"
@@ -595,20 +634,6 @@ check_shadow() {
         add_check "shadow" "CRITICAL" "PASS" "Katalog CNC_MASTER_DIR" "${master_dir}"
     else
         add_check "shadow" "CRITICAL" "FAIL" "Katalog CNC_MASTER_DIR" "Missing directory: ${master_dir}"
-    fi
-
-    if [ -f "/etc/samba/smb.conf" ]; then
-        samba_path="$(get_samba_share_path "/etc/samba/smb.conf" "cnc_usb" 2>/dev/null || true)"
-        samba_path="$(trim_string "${samba_path}")"
-        if [ -z "${samba_path}" ]; then
-            add_check "shadow" "WARN" "WARN" "Samba share cnc_usb path" "Nie znaleziono wpisu path w /etc/samba/smb.conf"
-        elif [ "${samba_path}" = "${master_dir}" ]; then
-            add_check "shadow" "WARN" "PASS" "Samba share cnc_usb path" "${samba_path} (zgodne z CNC_MASTER_DIR)"
-        else
-            add_check "shadow" "WARN" "WARN" "Samba share cnc_usb path" "${samba_path} (oczekiwane: ${master_dir})"
-        fi
-    else
-        add_check "shadow" "WARN" "WARN" "Samba share cnc_usb path" "Brak /etc/samba/smb.conf"
     fi
 
     image_a="$(get_env_value_or_default "${ENV_FILE}" "CNC_USB_IMG_A" "/var/lib/cnc-control/cnc_usb_a.img")"
@@ -794,6 +819,173 @@ PY
     fi
 }
 
+check_samba_unit() {
+    local unit="$1"
+    local expect_active="$2"
+    local expect_enabled="$3"
+    local active_state=""
+    local enabled_state=""
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        add_check "samba" "WARN" "WARN" "${unit} state" "systemctl not available"
+        return
+    fi
+
+    active_state="$(systemctl is-active "${unit}" 2>&1 || true)"
+    enabled_state="$(systemctl is-enabled "${unit}" 2>&1 || true)"
+    active_state="$(trim_string "${active_state}")"
+    enabled_state="$(trim_string "${enabled_state}")"
+
+    if [ "${active_state}" = "not-found" ] || [ "${enabled_state}" = "not-found" ]; then
+        add_check "samba" "WARN" "PASS" "${unit} available" "not-found (pakiet/usluga nieobecna)"
+        return
+    fi
+
+    if [ "${expect_active}" = "active" ]; then
+        if [ "${active_state}" = "active" ]; then
+            add_check "samba" "WARN" "PASS" "${unit} active" "${active_state}"
+        else
+            add_check "samba" "WARN" "WARN" "${unit} active" "${active_state}"
+        fi
+    else
+        if [ "${active_state}" = "active" ]; then
+            add_check "samba" "WARN" "WARN" "${unit} active" "${active_state}; expected inactive"
+        else
+            add_check "samba" "WARN" "PASS" "${unit} active" "${active_state}"
+        fi
+    fi
+
+    if [ "${expect_enabled}" = "enabled" ]; then
+        if [ "${enabled_state}" = "enabled" ]; then
+            add_check "samba" "WARN" "PASS" "${unit} enabled" "${enabled_state}"
+        else
+            add_check "samba" "WARN" "WARN" "${unit} enabled" "${enabled_state}"
+        fi
+    else
+        case "${enabled_state}" in
+            disabled|masked|static|indirect|generated|alias)
+                add_check "samba" "WARN" "PASS" "${unit} enabled" "${enabled_state}"
+                ;;
+            *)
+                add_check "samba" "WARN" "WARN" "${unit} enabled" "${enabled_state}; expected disabled/masked"
+                ;;
+        esac
+    fi
+}
+
+check_samba() {
+    local samba_conf="/etc/samba/smb.conf"
+    local shadow_enabled=0
+    local expected_path=""
+    local share_path=""
+    local read_only_value=""
+    local guest_ok_value=""
+    local smb_ports_value=""
+    local force_user_value=""
+    local force_group_value=""
+    local share_owner_user=""
+    local share_owner_group=""
+
+    if is_shadow_enabled; then
+        shadow_enabled=1
+    fi
+
+    if [ "${shadow_enabled}" -eq 1 ]; then
+        expected_path="$(get_env_value_or_default "${ENV_FILE}" "CNC_MASTER_DIR" "/var/lib/cnc-control/master")"
+    else
+        expected_path="$(get_env_value "${ENV_FILE}" "CNC_UPLOAD_DIR" 2>/dev/null || true)"
+        expected_path="$(trim_string "${expected_path}")"
+        if [ -z "${expected_path}" ]; then
+            expected_path="$(get_env_value "${ENV_FILE}" "CNC_MOUNT_POINT" 2>/dev/null || true)"
+            expected_path="$(trim_string "${expected_path}")"
+        fi
+        if [ -z "${expected_path}" ]; then
+            expected_path="${SAMBA_DEFAULT_SHARE_PATH}"
+        fi
+    fi
+    expected_path="$(trim_string "${expected_path}")"
+
+    if [ ! -f "${samba_conf}" ]; then
+        add_check "samba" "WARN" "WARN" "Samba config file present" "Missing ${samba_conf}"
+        check_samba_unit "smbd.service" "active" "enabled"
+        check_samba_unit "nmbd.service" "inactive" "disabled"
+        check_samba_unit "samba-ad-dc.service" "inactive" "disabled"
+        return
+    fi
+    add_check "samba" "WARN" "PASS" "Samba config file present" "${samba_conf}"
+
+    share_path="$(get_samba_share_path "${samba_conf}" "cnc_usb" 2>/dev/null || true)"
+    share_path="$(trim_string "${share_path}")"
+    if [ -z "${share_path}" ]; then
+        add_check "samba" "WARN" "WARN" "Samba share cnc_usb path" "No path entry found"
+    elif [ "${share_path}" = "${expected_path}" ]; then
+        add_check "samba" "WARN" "PASS" "Samba share cnc_usb path" "${share_path}"
+    else
+        add_check "samba" "WARN" "WARN" "Samba share cnc_usb path" "${share_path}; expected ${expected_path}"
+    fi
+
+    read_only_value="$(get_samba_option "${samba_conf}" "cnc_usb" "read only" 2>/dev/null || true)"
+    read_only_value="$(printf '%s' "${read_only_value}" | tr '[:upper:]' '[:lower:]')"
+    if [ "${read_only_value}" = "no" ]; then
+        add_check "samba" "WARN" "PASS" "Samba share cnc_usb read only" "no"
+    else
+        add_check "samba" "WARN" "WARN" "Samba share cnc_usb read only" "${read_only_value:-missing}; expected no"
+    fi
+
+    guest_ok_value="$(get_samba_option "${samba_conf}" "cnc_usb" "guest ok" 2>/dev/null || true)"
+    guest_ok_value="$(printf '%s' "${guest_ok_value}" | tr '[:upper:]' '[:lower:]')"
+    if [ "${guest_ok_value}" = "yes" ]; then
+        add_check "samba" "WARN" "PASS" "Samba share cnc_usb guest ok" "yes"
+    else
+        add_check "samba" "WARN" "WARN" "Samba share cnc_usb guest ok" "${guest_ok_value:-missing}; expected yes"
+    fi
+
+    smb_ports_value="$(get_samba_option "${samba_conf}" "global" "smb ports" 2>/dev/null || true)"
+    smb_ports_value="$(trim_string "${smb_ports_value}")"
+    if [ "${smb_ports_value}" = "445" ]; then
+        add_check "samba" "WARN" "PASS" "Samba global smb ports" "${smb_ports_value}"
+    else
+        add_check "samba" "WARN" "WARN" "Samba global smb ports" "${smb_ports_value:-missing}; expected 445"
+    fi
+
+    if command_available "ss"; then
+        if ss -ltn 2>/dev/null | awk 'NR > 1 && $1 == "LISTEN" && $4 ~ /:445$/ { found = 1 } END { exit(found ? 0 : 1) }'; then
+            add_check "samba" "WARN" "PASS" "Samba listen port 445" "LISTEN"
+        else
+            add_check "samba" "WARN" "WARN" "Samba listen port 445" "No listener on 445"
+        fi
+    else
+        add_check "samba" "WARN" "WARN" "Samba listen port 445" "Command ss not available"
+    fi
+
+    check_samba_unit "smbd.service" "active" "enabled"
+    check_samba_unit "nmbd.service" "inactive" "disabled"
+    check_samba_unit "samba-ad-dc.service" "inactive" "disabled"
+
+    if [ "${shadow_enabled}" -eq 1 ] && [ -n "${share_path}" ] && [ -e "${share_path}" ]; then
+        force_user_value="$(get_samba_option "${samba_conf}" "cnc_usb" "force user" 2>/dev/null || true)"
+        force_group_value="$(get_samba_option "${samba_conf}" "cnc_usb" "force group" 2>/dev/null || true)"
+        force_user_value="$(trim_string "${force_user_value}")"
+        force_group_value="$(trim_string "${force_group_value}")"
+        share_owner_user="$(stat -c %U "${share_path}" 2>/dev/null || true)"
+        share_owner_group="$(stat -c %G "${share_path}" 2>/dev/null || true)"
+        share_owner_user="$(trim_string "${share_owner_user}")"
+        share_owner_group="$(trim_string "${share_owner_group}")"
+
+        if [ -n "${force_user_value}" ] && [ "${force_user_value}" = "${share_owner_user}" ]; then
+            add_check "samba" "WARN" "PASS" "Samba share cnc_usb force user" "${force_user_value}"
+        else
+            add_check "samba" "WARN" "WARN" "Samba share cnc_usb force user" "${force_user_value:-missing}; expected ${share_owner_user}"
+        fi
+
+        if [ -n "${force_group_value}" ] && [ "${force_group_value}" = "${share_owner_group}" ]; then
+            add_check "samba" "WARN" "PASS" "Samba share cnc_usb force group" "${force_group_value}"
+        else
+            add_check "samba" "WARN" "WARN" "Samba share cnc_usb force group" "${force_group_value:-missing}; expected ${share_owner_group}"
+        fi
+    fi
+}
+
 check_systemd_service() {
     local service_name="$1"
     local enabled_output=""
@@ -967,6 +1159,7 @@ main() {
     check_usb_image
     check_project_config
     check_shadow
+    check_samba
     check_systemd
     check_hardware
 
