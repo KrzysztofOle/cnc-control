@@ -85,6 +85,8 @@ Dla testow integracyjnych (SSH/SMB):
 python3 tools/bootstrap_env.py --target integration
 ```
 
+Szczegoly uruchamiania i faz testow: `integration_tests/README.md`.
+
 ---
 
 ## 🧱 Instalacja systemowa

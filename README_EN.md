@@ -88,6 +88,8 @@ For integration tests (SSH/SMB):
 python3 tools/bootstrap_env.py --target integration
 ```
 
+Execution details and phase breakdown: `integration_tests/README_EN.md`.
+
 ---
 
 ## 🧱 System installation

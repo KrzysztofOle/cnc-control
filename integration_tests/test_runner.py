@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import platform
+import re
 import shlex
 import shutil
 import socket
@@ -14,11 +15,19 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urljoin, urlparse
+
+# PL: Zapewnia wpis modułu dla loaderow testowych, ktore nie rejestruja modułu w sys.modules.
+# EN: Ensures module registration for test loaders that do not register it in sys.modules.
+if __name__ not in sys.modules:
+    module_placeholder = types.ModuleType(__name__)
+    module_placeholder.__dict__.update(globals())
+    sys.modules[__name__] = module_placeholder
 
 EXPECTED_ENV_TARGETS = {"dev", "integration"}
 ENV_MARKER_FILENAME = ".cnc_target"
@@ -258,13 +267,21 @@ class Runner:
         self.connect_ssh()
 
         ssh_probe = self.ssh_exec("echo preflight_ssh_ok", check=True)
-        env_payload = self.read_remote_env()
-        self.remote_env = env_payload
+        initial_env_payload = self.read_remote_env()
 
-        repo_path = env_payload.get("CNC_CONTROL_REPO")
+        repo_path = initial_env_payload.get("CNC_CONTROL_REPO")
         if not repo_path:
             repo_path = f"/home/{self.args.ssh_user}/cnc-control"
         self.remote_repo = repo_path
+
+        remote_refresh = self.refresh_remote_target(
+            repo_path=repo_path,
+            env_payload=initial_env_payload,
+        )
+
+        env_payload = self.read_remote_env()
+        self.remote_env = env_payload
+        self.remote_repo = env_payload.get("CNC_CONTROL_REPO") or self.remote_repo
 
         self.upload_dir = (
             env_payload.get("CNC_UPLOAD_DIR")
@@ -282,7 +299,7 @@ class Runner:
                 "Brak CNC_UPLOAD_DIR/CNC_MOUNT_POINT w /etc/cnc-control/cnc-control.env"
             )
 
-        status_cmd = f"{shlex.quote(str(PurePosixPath(repo_path) / 'status.sh'))}"
+        status_cmd = f"{shlex.quote(str(PurePosixPath(self.remote_repo or repo_path) / 'status.sh'))}"
         status_result = self.ssh_exec(status_cmd, check=True)
         status_mode = parse_status_mode(status_result["stdout"])
         status_mount = parse_status_mount_point(status_result["stdout"])
@@ -305,8 +322,9 @@ class Runner:
                 "user": self.args.ssh_user,
                 "stdout": ssh_probe["stdout"],
             },
+            "remote_refresh": remote_refresh,
             "env": {
-                "repo": repo_path,
+                "repo": self.remote_repo,
                 "upload_dir": self.upload_dir,
                 "mount_point": self.mount_point,
                 "shadow_enabled": env_payload.get("CNC_SHADOW_ENABLED"),
@@ -326,6 +344,414 @@ class Runner:
             },
             "shadow_enabled": self.shadow_enabled,
         }
+
+    def refresh_remote_target(
+        self,
+        *,
+        repo_path: str,
+        env_payload: dict[str, str],
+    ) -> dict[str, Any]:
+        if self.args.skip_remote_refresh:
+            return {
+                "status": "skipped",
+                "reason": "Skipped by --skip-remote-refresh.",
+            }
+
+        repo_path_quoted = shlex.quote(repo_path)
+        venv_dir = env_payload.get("CNC_VENV_DIR") or str(PurePosixPath(repo_path) / ".venv")
+
+        self.ssh_exec(
+            f"test -d {repo_path_quoted}",
+            check=True,
+        )
+        self.ssh_exec(
+            f"git -C {repo_path_quoted} rev-parse --is-inside-work-tree",
+            check=True,
+        )
+
+        branch_result = self.ssh_exec(
+            f"git -C {repo_path_quoted} rev-parse --abbrev-ref HEAD",
+            check=True,
+        )
+        head_before_result = self.ssh_exec(
+            f"git -C {repo_path_quoted} rev-parse HEAD",
+            check=True,
+        )
+        origin_result = self.ssh_exec(
+            f"git -C {repo_path_quoted} remote get-url origin",
+            check=False,
+        )
+
+        pull_result = self.ssh_exec(
+            f"git -C {repo_path_quoted} pull --ff-only",
+            timeout=self.args.remote_refresh_timeout,
+            check=True,
+        )
+
+        head_after_result = self.ssh_exec(
+            f"git -C {repo_path_quoted} rev-parse HEAD",
+            check=True,
+        )
+
+        bootstrap_and_install_command = (
+            "set -euo pipefail\n"
+            f"repo_path={shlex.quote(repo_path)}\n"
+            f"venv_dir={shlex.quote(venv_dir)}\n"
+            "cd \"$repo_path\"\n"
+            "if [ ! -x \"$venv_dir/bin/python3\" ]; then\n"
+            "  python3 tools/bootstrap_env.py --target rpi --venv-dir \"$venv_dir\"\n"
+            "fi\n"
+            "\"$venv_dir/bin/python3\" -m pip install --editable '.[rpi]'\n"
+        )
+        self.ssh_exec(
+            bootstrap_and_install_command,
+            timeout=self.args.remote_refresh_timeout,
+            check=True,
+        )
+
+        config_refresh_command = (
+            "set -euo pipefail\n"
+            f"repo_path={shlex.quote(repo_path)}\n"
+            f"venv_dir={shlex.quote(venv_dir)}\n"
+            "if [ \"$(id -u)\" -eq 0 ]; then\n"
+            "  env SUDO_USER=\"${SUDO_USER:-root}\" CNC_VENV_DIR=\"$venv_dir\" "
+            "bash \"$repo_path/tools/setup_webui.sh\" \"$repo_path\"\n"
+            "  bash \"$repo_path/tools/setup_usb_service.sh\" \"$repo_path\"\n"
+            "  env CNC_VENV_DIR=\"$venv_dir\" bash \"$repo_path/tools/setup_led_service.sh\" \"$repo_path\"\n"
+            "else\n"
+            "  sudo -n env SUDO_USER=\"$USER\" CNC_VENV_DIR=\"$venv_dir\" "
+            "bash \"$repo_path/tools/setup_webui.sh\" \"$repo_path\"\n"
+            "  sudo -n bash \"$repo_path/tools/setup_usb_service.sh\" \"$repo_path\"\n"
+            "  sudo -n env CNC_VENV_DIR=\"$venv_dir\" "
+            "bash \"$repo_path/tools/setup_led_service.sh\" \"$repo_path\"\n"
+            "fi\n"
+        )
+        self.ssh_exec(
+            config_refresh_command,
+            timeout=self.args.remote_refresh_timeout,
+            check=True,
+        )
+
+        selftest_report = self.run_remote_selftest_with_auto_repair(
+            repo_path=repo_path,
+            venv_dir=venv_dir,
+            env_payload=env_payload,
+        )
+        selftest_result = selftest_report["result"]
+        selftest_payload = selftest_report["payload"]
+
+        required_services = (
+            "cnc-webui.service",
+            "cnc-usb.service",
+            "cnc-led.service",
+        )
+        systemd_states: dict[str, str] = {}
+        for service_name in required_services:
+            state_result = self.ssh_exec(
+                f"systemctl is-active {shlex.quote(service_name)}",
+                check=False,
+            )
+            state = (state_result["stdout"] or "").strip()
+            systemd_states[service_name] = state or "unknown"
+            if state != "active":
+                raise RuntimeError(
+                    f"Wymagana usługa systemd nie jest aktywna: {service_name} -> {state or 'unknown'}"
+                )
+
+        journal_result = self.ssh_exec(
+            "journalctl -p 3 -n 20 --no-pager",
+            check=False,
+        )
+        if journal_result["exit_status"] != 0:
+            fallback_journal = self.ssh_exec(
+                "sudo -n journalctl -p 3 -n 20 --no-pager",
+                check=True,
+            )
+            journal_output = fallback_journal["stdout"]
+        else:
+            journal_output = journal_result["stdout"]
+
+        journal_lines = [line for line in journal_output.splitlines() if line.strip()]
+        journal_cnc_lines = self.filter_cnc_journal_lines(journal_lines)
+        if journal_cnc_lines:
+            journal_preview = "\n".join(journal_cnc_lines[-5:])
+            raise RuntimeError(
+                "Wykryto wpisy ERROR/CRITICAL zwiazane z CNC w journalctl -p 3 -n 20:\n"
+                f"{journal_preview}"
+            )
+
+        refresh_details: dict[str, Any] = {
+            "status": "ok",
+            "repo": {
+                "path": repo_path,
+                "origin": origin_result["stdout"] or None,
+                "branch": branch_result["stdout"],
+                "head_before": head_before_result["stdout"],
+                "head_after": head_after_result["stdout"],
+                "updated": head_before_result["stdout"] != head_after_result["stdout"],
+                "pull_stdout": pull_result["stdout"],
+            },
+            "venv": {
+                "path": venv_dir,
+            },
+            "systemd": systemd_states,
+            "journal_priority_le_3_entries_total": len(journal_lines),
+            "journal_priority_le_3_entries_cnc": len(journal_cnc_lines),
+        }
+        if isinstance(selftest_payload, dict):
+            refresh_details["selftest"] = {
+                "format": "json",
+                "summary": selftest_payload.get("summary"),
+                "result": selftest_payload.get("result"),
+                "attempts": selftest_report["attempts"],
+                "auto_repair_runtime_lun": selftest_report["auto_repair_runtime_lun"],
+                "auto_repair_details": selftest_report.get("auto_repair_details"),
+            }
+        else:
+            refresh_details["selftest"] = {
+                "format": "text",
+                "stdout_preview": "\n".join(
+                    (selftest_result["stdout"] or "").splitlines()[-10:]
+                ),
+                "attempts": selftest_report["attempts"],
+                "auto_repair_runtime_lun": selftest_report["auto_repair_runtime_lun"],
+                "auto_repair_details": selftest_report.get("auto_repair_details"),
+            }
+
+        return refresh_details
+
+    def run_remote_selftest_with_auto_repair(
+        self,
+        *,
+        repo_path: str,
+        venv_dir: str,
+        env_payload: dict[str, str],
+    ) -> dict[str, Any]:
+        first_result, first_payload = self.run_remote_selftest(
+            repo_path=repo_path,
+            venv_dir=venv_dir,
+        )
+        if first_result["exit_status"] == 0:
+            return {
+                "result": first_result,
+                "payload": first_payload,
+                "attempts": 1,
+                "auto_repair_runtime_lun": False,
+                "auto_repair_details": None,
+            }
+
+        auto_repair_details: dict[str, Any] | None = None
+        if (
+            not self.args.disable_selftest_auto_repair
+            and self.is_runtime_lun_mismatch_failure(first_payload)
+        ):
+            repair_result = self.repair_runtime_lun_shadow_slot(env_payload)
+            auto_repair_details = {
+                "kind": "runtime_lun_shadow_slot",
+                "stdout": repair_result["stdout"],
+                "stderr": repair_result["stderr"],
+            }
+            second_result, second_payload = self.run_remote_selftest(
+                repo_path=repo_path,
+                venv_dir=venv_dir,
+            )
+            if second_result["exit_status"] == 0:
+                return {
+                    "result": second_result,
+                    "payload": second_payload,
+                    "attempts": 2,
+                    "auto_repair_runtime_lun": True,
+                    "auto_repair_details": auto_repair_details,
+                }
+            first_result = second_result
+            first_payload = second_payload
+
+        raise RuntimeError(
+            self.build_selftest_failure_message(
+                result=first_result,
+                payload=first_payload,
+                auto_repair_details=auto_repair_details,
+            )
+        )
+
+    def run_remote_selftest(
+        self,
+        *,
+        repo_path: str,
+        venv_dir: str,
+    ) -> tuple[dict[str, Any], Any]:
+        selftest_command = (
+            "set -euo pipefail\n"
+            f"repo_path={shlex.quote(repo_path)}\n"
+            f"venv_dir={shlex.quote(venv_dir)}\n"
+            "cd \"$repo_path\"\n"
+            "if [ ! -f \"$venv_dir/bin/activate\" ]; then\n"
+            "  echo \"Missing virtualenv activate script: $venv_dir/bin/activate\" >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            ". \"$venv_dir/bin/activate\"\n"
+            "./tools/cnc_selftest.sh --json\n"
+        )
+        result = self.ssh_exec(
+            selftest_command,
+            timeout=self.args.remote_selftest_timeout,
+            check=False,
+        )
+        payload = self.parse_json_if_possible(result["stdout"])
+        return result, payload
+
+    def is_runtime_lun_mismatch_failure(self, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        runtime = payload.get("runtime")
+        if not isinstance(runtime, dict):
+            return False
+        checks = runtime.get("checks")
+        if not isinstance(checks, list):
+            return False
+        mismatch_present = False
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            name = str(check.get("name") or "")
+            status = str(check.get("status") or "").upper()
+            if name == "Runtime LUN image matches expected" and status == "FAIL":
+                mismatch_present = True
+                break
+        if not mismatch_present:
+            return False
+        summary = payload.get("summary")
+        if isinstance(summary, dict):
+            critical = int(summary.get("critical") or 0)
+            return critical <= 1
+        return True
+
+    def repair_runtime_lun_shadow_slot(self, env_payload: dict[str, str]) -> dict[str, Any]:
+        slot_file = env_payload.get("CNC_ACTIVE_SLOT_FILE") or "/var/lib/cnc-control/shadow_active_slot.state"
+        image_a = env_payload.get("CNC_USB_IMG_A") or "/var/lib/cnc-control/cnc_usb_a.img"
+        image_b = env_payload.get("CNC_USB_IMG_B") or "/var/lib/cnc-control/cnc_usb_b.img"
+
+        command = (
+            "set -euo pipefail\n"
+            f"slot_file={shlex.quote(slot_file)}\n"
+            f"image_a={shlex.quote(image_a)}\n"
+            f"image_b={shlex.quote(image_b)}\n"
+            "runtime_file='/sys/module/g_mass_storage/parameters/file'\n"
+            "if [ ! -f \"$slot_file\" ]; then\n"
+            "  echo \"Missing active slot file: $slot_file\" >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "slot_raw=\"$(tr -d '\\r\\n\\t ' < \"$slot_file\")\"\n"
+            "slot=\"$(printf '%s' \"$slot_raw\" | tr '[:lower:]' '[:upper:]')\"\n"
+            "if [ \"$slot\" = 'A' ]; then\n"
+            "  expected=\"$image_a\"\n"
+            "elif [ \"$slot\" = 'B' ]; then\n"
+            "  expected=\"$image_b\"\n"
+            "else\n"
+            "  echo \"Invalid active slot value: $slot\" >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "runtime_before=\"$(cat \"$runtime_file\" 2>/dev/null || true)\"\n"
+            "run_root() {\n"
+            "  if [ \"$(id -u)\" -eq 0 ]; then\n"
+            "    \"$@\"\n"
+            "  else\n"
+            "    sudo -n \"$@\"\n"
+            "  fi\n"
+            "}\n"
+            "if [ \"$runtime_before\" != \"$expected\" ]; then\n"
+            "  run_root modprobe -r g_mass_storage || true\n"
+            "  run_root modprobe g_mass_storage \"file=$expected\" ro=1 removable=1\n"
+            "fi\n"
+            "runtime_after=\"$(cat \"$runtime_file\" 2>/dev/null || true)\"\n"
+            "if [ \"$runtime_after\" != \"$expected\" ]; then\n"
+            "  echo \"Runtime LUN mismatch after repair: runtime=$runtime_after expected=$expected\" >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "printf 'slot=%s expected=%s runtime_before=%s runtime_after=%s\\n' "
+            "\"$slot\" \"$expected\" \"$runtime_before\" \"$runtime_after\"\n"
+        )
+        return self.ssh_exec(
+            command,
+            timeout=self.args.remote_refresh_timeout,
+            check=True,
+        )
+
+    def build_selftest_failure_message(
+        self,
+        *,
+        result: dict[str, Any],
+        payload: Any,
+        auto_repair_details: dict[str, Any] | None,
+    ) -> str:
+        parts = [
+            f"cnc_selftest failed (rc={result['exit_status']})",
+        ]
+
+        if isinstance(payload, dict):
+            summary = payload.get("summary")
+            if isinstance(summary, dict):
+                parts.append(
+                    "summary="
+                    f"status:{summary.get('status')}, "
+                    f"critical:{summary.get('critical')}, "
+                    f"warnings:{summary.get('warnings')}"
+                )
+            failed_checks = self.extract_failed_check_messages(payload, limit=3)
+            if failed_checks:
+                parts.append("failed_checks=" + " | ".join(failed_checks))
+
+        if auto_repair_details:
+            parts.append("auto_repair_attempted=true")
+
+        stderr_preview = (result.get("stderr") or "").strip()
+        if stderr_preview:
+            parts.append(f"stderr={stderr_preview}")
+
+        stdout_preview = "\n".join((result.get("stdout") or "").splitlines()[-10:])
+        if stdout_preview:
+            parts.append(f"stdout_tail={stdout_preview}")
+
+        return "; ".join(parts)
+
+    def extract_failed_check_messages(self, payload: dict[str, Any], limit: int) -> list[str]:
+        messages: list[str] = []
+        for section_name, section_payload in payload.items():
+            if section_name == "summary":
+                continue
+            if not isinstance(section_payload, dict):
+                continue
+            checks = section_payload.get("checks")
+            if not isinstance(checks, list):
+                continue
+            for check in checks:
+                if not isinstance(check, dict):
+                    continue
+                status = str(check.get("status") or "").upper()
+                if status != "FAIL":
+                    continue
+                name = str(check.get("name") or "?")
+                detail = str(check.get("detail") or "")
+                messages.append(f"{section_name}:{name}:{detail}")
+                if len(messages) >= limit:
+                    return messages
+        return messages
+
+    def filter_cnc_journal_lines(self, journal_lines: list[str]) -> list[str]:
+        pattern = re.compile(
+            r"(cnc[-_]|cnc-control|usb_mode|net_mode|shadow|led_status|webui)",
+            flags=re.IGNORECASE,
+        )
+        return [line for line in journal_lines if pattern.search(line)]
+
+    def parse_json_if_possible(self, content: str) -> Any:
+        text = content.strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
 
     def phase_1_net_webui(self) -> dict[str, Any]:
         if self.shadow_enabled:
@@ -1216,6 +1642,34 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=90.0,
         help="Timeout waiting for NET/USB switch completion.",
+    )
+    parser.add_argument(
+        "--skip-remote-refresh",
+        action="store_true",
+        help=(
+            "Skip remote CI refresh stage in preflight "
+            "(git pull, pip install, setup_* services, selftest, systemd checks)."
+        ),
+    )
+    parser.add_argument(
+        "--remote-refresh-timeout",
+        type=float,
+        default=300.0,
+        help="Timeout in seconds for remote refresh commands.",
+    )
+    parser.add_argument(
+        "--remote-selftest-timeout",
+        type=float,
+        default=180.0,
+        help="Timeout in seconds for remote cnc_selftest execution.",
+    )
+    parser.add_argument(
+        "--disable-selftest-auto-repair",
+        action="store_true",
+        help=(
+            "Disable automatic one-shot selftest repair for SHADOW runtime LUN mismatch "
+            "(Runtime LUN image matches expected)."
+        ),
     )
 
     # PL: Parametry SMB do testu zapisu/usuwania przez udział sieciowy.
