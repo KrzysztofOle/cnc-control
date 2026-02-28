@@ -10,7 +10,7 @@ WARN_COUNT=0
 ENV_FILE="/etc/cnc-control/cnc-control.env"
 MIN_USB_IMAGE_SIZE_BYTES=1048576
 
-SECTIONS=("boot" "kernel" "gadget" "usb_image" "project_config" "shadow" "samba" "systemd" "hardware")
+SECTIONS=("boot" "kernel" "gadget" "usb_image" "project_config" "shadow" "samba" "systemd" "runtime" "logs" "hardware")
 SAMBA_DEFAULT_SHARE_PATH="/mnt/cnc_usb"
 
 REPORT_STATUS=()
@@ -53,7 +53,9 @@ section_index() {
         shadow) printf '5' ;;
         samba) printf '6' ;;
         systemd) printf '7' ;;
-        hardware) printf '8' ;;
+        runtime) printf '8' ;;
+        logs) printf '9' ;;
+        hardware) printf '10' ;;
         *) printf '%s' "-1" ;;
     esac
 }
@@ -329,6 +331,27 @@ resolve_command_path() {
 command_available() {
     local binary_name="$1"
     resolve_command_path "${binary_name}" >/dev/null 2>&1
+}
+
+normalize_path() {
+    local path_value="$1"
+
+    if [ -z "${path_value}" ]; then
+        printf '%s' ""
+        return 0
+    fi
+
+    if command -v readlink >/dev/null 2>&1; then
+        local normalized=""
+        normalized="$(readlink -f "${path_value}" 2>/dev/null || true)"
+        normalized="$(trim_string "${normalized}")"
+        if [ -n "${normalized}" ]; then
+            printf '%s' "${normalized}"
+            return 0
+        fi
+    fi
+
+    printf '%s' "${path_value}"
 }
 
 file_size_bytes() {
@@ -990,6 +1013,13 @@ check_systemd_service() {
     local service_name="$1"
     local enabled_output=""
     local active_output=""
+    local show_output=""
+    local load_state=""
+    local sub_state=""
+    local result_state=""
+    local n_restarts=""
+    local exec_main_status=""
+    local service_health_detail=""
 
     enabled_output="$(systemctl is-enabled "${service_name}" 2>&1 || true)"
     enabled_output="$(trim_string "${enabled_output}")"
@@ -1006,6 +1036,63 @@ check_systemd_service() {
     else
         add_check "systemd" "WARN" "WARN" "${service_name} active" "${active_output}"
     fi
+
+    show_output="$(systemctl show "${service_name}" \
+        --property=LoadState \
+        --property=SubState \
+        --property=Result \
+        --property=NRestarts \
+        --property=ExecMainStatus \
+        2>/dev/null || true)"
+
+    load_state="$(printf '%s\n' "${show_output}" | awk -F= '$1=="LoadState" { print $2; exit }')"
+    sub_state="$(printf '%s\n' "${show_output}" | awk -F= '$1=="SubState" { print $2; exit }')"
+    result_state="$(printf '%s\n' "${show_output}" | awk -F= '$1=="Result" { print $2; exit }')"
+    n_restarts="$(printf '%s\n' "${show_output}" | awk -F= '$1=="NRestarts" { print $2; exit }')"
+    exec_main_status="$(printf '%s\n' "${show_output}" | awk -F= '$1=="ExecMainStatus" { print $2; exit }')"
+
+    load_state="$(trim_string "${load_state}")"
+    sub_state="$(trim_string "${sub_state}")"
+    result_state="$(trim_string "${result_state}")"
+    n_restarts="$(trim_string "${n_restarts}")"
+    exec_main_status="$(trim_string "${exec_main_status}")"
+    service_health_detail="active=${active_output}; sub=${sub_state:-unknown}; result=${result_state:-unknown}; restarts=${n_restarts:-unknown}; exec=${exec_main_status:-unknown}"
+
+    if [ "${load_state}" = "not-found" ]; then
+        add_check "systemd" "CRITICAL" "FAIL" "${service_name} present" "LoadState=not-found"
+        return
+    fi
+
+    if [ "${active_output}" != "active" ]; then
+        add_check "systemd" "CRITICAL" "FAIL" "${service_name} runtime health" "${service_health_detail}"
+        return
+    fi
+
+    case "${sub_state}" in
+        running|listening|exited) ;;
+        *)
+            add_check "systemd" "CRITICAL" "FAIL" "${service_name} runtime health" "${service_health_detail}"
+            return
+            ;;
+    esac
+
+    if [ -n "${result_state}" ] && [ "${result_state}" != "success" ] && [ "${result_state}" != "done" ]; then
+        add_check "systemd" "CRITICAL" "FAIL" "${service_name} runtime health" "${service_health_detail}"
+        return
+    fi
+
+    if [ -n "${exec_main_status}" ] && [ "${exec_main_status}" != "0" ]; then
+        add_check "systemd" "CRITICAL" "FAIL" "${service_name} runtime health" "${service_health_detail}"
+        return
+    fi
+
+    add_check "systemd" "CRITICAL" "PASS" "${service_name} runtime health" "${service_health_detail}"
+
+    if [ -n "${n_restarts}" ] && [ "${n_restarts}" -gt 0 ] 2>/dev/null; then
+        add_check "systemd" "WARN" "WARN" "${service_name} restart count" "${n_restarts}"
+    else
+        add_check "systemd" "WARN" "PASS" "${service_name} restart count" "${n_restarts:-0}"
+    fi
 }
 
 check_systemd() {
@@ -1016,6 +1103,134 @@ check_systemd() {
     check_systemd_service "cnc-usb.service"
     check_systemd_service "cnc-webui.service"
     check_systemd_service "cnc-led.service"
+}
+
+read_runtime_lun_path() {
+    local configfs_lun_file="/sys/kernel/config/usb_gadget/g1/functions/mass_storage.0/lun.0/file"
+    local legacy_lun_file="/sys/module/g_mass_storage/parameters/file"
+    local runtime_path=""
+
+    if [ -r "${configfs_lun_file}" ]; then
+        runtime_path="$(tr -d '\r\n' < "${configfs_lun_file}" 2>/dev/null || true)"
+        runtime_path="$(trim_string "${runtime_path}")"
+        if [ -n "${runtime_path}" ]; then
+            printf '%s' "${runtime_path}"
+            return 0
+        fi
+    fi
+
+    if [ -r "${legacy_lun_file}" ]; then
+        runtime_path="$(tr -d '\r\n' < "${legacy_lun_file}" 2>/dev/null || true)"
+        runtime_path="$(trim_string "${runtime_path}")"
+        if [ -n "${runtime_path}" ]; then
+            printf '%s' "${runtime_path}"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+check_runtime_consistency() {
+    local expected_path=""
+    local expected_slot=""
+    local slot_file=""
+    local image_a=""
+    local image_b=""
+    local runtime_path=""
+    local expected_norm=""
+    local runtime_norm=""
+
+    if [ ! -f "${ENV_FILE}" ]; then
+        add_check "runtime" "CRITICAL" "FAIL" "Runtime config file present" "Missing ${ENV_FILE}"
+        return
+    fi
+
+    if is_shadow_enabled; then
+        slot_file="$(get_env_value_or_default "${ENV_FILE}" "CNC_ACTIVE_SLOT_FILE" "/var/lib/cnc-control/shadow_active_slot.state")"
+        image_a="$(get_env_value_or_default "${ENV_FILE}" "CNC_USB_IMG_A" "/var/lib/cnc-control/cnc_usb_a.img")"
+        image_b="$(get_env_value_or_default "${ENV_FILE}" "CNC_USB_IMG_B" "/var/lib/cnc-control/cnc_usb_b.img")"
+
+        if [ ! -f "${slot_file}" ]; then
+            add_check "runtime" "CRITICAL" "FAIL" "Runtime active slot file present" "Missing file: ${slot_file}"
+            return
+        fi
+
+        expected_slot="$(tr -d '\r\n\t ' < "${slot_file}" 2>/dev/null || true)"
+        expected_slot="$(printf '%s' "${expected_slot}" | tr '[:lower:]' '[:upper:]')"
+        if [ "${expected_slot}" = "A" ]; then
+            expected_path="${image_a}"
+        elif [ "${expected_slot}" = "B" ]; then
+            expected_path="${image_b}"
+        else
+            add_check "runtime" "CRITICAL" "FAIL" "Runtime active slot valid" "${slot_file}: invalid value '${expected_slot}'"
+            return
+        fi
+        add_check "runtime" "CRITICAL" "PASS" "Runtime active slot valid" "${slot_file}: ${expected_slot}"
+    else
+        expected_path="$(get_env_value "${ENV_FILE}" "CNC_USB_IMG" 2>/dev/null || true)"
+        expected_path="$(trim_string "${expected_path}")"
+        if [ -z "${expected_path}" ]; then
+            add_check "runtime" "CRITICAL" "FAIL" "Runtime expected image path configured" "CNC_USB_IMG missing in ${ENV_FILE}"
+            return
+        fi
+    fi
+
+    runtime_path="$(read_runtime_lun_path || true)"
+    runtime_path="$(trim_string "${runtime_path}")"
+    if [ -z "${runtime_path}" ]; then
+        add_check "runtime" "CRITICAL" "FAIL" "Runtime LUN image path detected" "Cannot read active LUN path from configfs or g_mass_storage"
+        return
+    fi
+
+    add_check "runtime" "CRITICAL" "PASS" "Runtime LUN image path detected" "${runtime_path}"
+
+    expected_norm="$(normalize_path "${expected_path}")"
+    runtime_norm="$(normalize_path "${runtime_path}")"
+    if [ "${runtime_norm}" = "${expected_norm}" ]; then
+        add_check "runtime" "CRITICAL" "PASS" "Runtime LUN image matches expected" "runtime=${runtime_norm}; expected=${expected_norm}"
+    else
+        add_check "runtime" "CRITICAL" "FAIL" "Runtime LUN image matches expected" "runtime=${runtime_norm}; expected=${expected_norm}"
+    fi
+}
+
+check_recent_journal_errors() {
+    local scope_label="$1"
+    local output=""
+    local rc=0
+    local compact=""
+
+    shift
+    output="$(journalctl --no-pager -n 20 -p 3 "$@" 2>&1)"
+    rc=$?
+    compact="$(compact_output "${output}")"
+
+    if [ "${rc}" -ne 0 ]; then
+        if printf '%s' "${compact}" | grep -Eiq 'access denied|permission denied|not permitted'; then
+            add_check "logs" "WARN" "WARN" "${scope_label} journal access" "${compact}"
+        else
+            add_check "logs" "WARN" "WARN" "${scope_label} journal access" "journalctl rc=${rc}; ${compact}"
+        fi
+        return
+    fi
+
+    if [ -z "${compact}" ] || printf '%s' "${compact}" | grep -q "No entries"; then
+        add_check "logs" "CRITICAL" "PASS" "${scope_label} journal errors (last 20)" "none"
+    else
+        add_check "logs" "CRITICAL" "FAIL" "${scope_label} journal errors (last 20)" "${compact}"
+    fi
+}
+
+check_logs() {
+    if ! command_available "journalctl"; then
+        add_check "logs" "WARN" "WARN" "journalctl available" "Command not available"
+        return
+    fi
+
+    check_recent_journal_errors "System"
+    check_recent_journal_errors "cnc-usb.service" -u "cnc-usb.service"
+    check_recent_journal_errors "cnc-webui.service" -u "cnc-webui.service"
+    check_recent_journal_errors "cnc-led.service" -u "cnc-led.service"
 }
 
 check_hardware() {
@@ -1161,6 +1376,8 @@ main() {
     check_shadow
     check_samba
     check_systemd
+    check_runtime_consistency
+    check_logs
     check_hardware
 
     if [ "${JSON_ONLY}" -eq 1 ]; then
