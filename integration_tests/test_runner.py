@@ -199,6 +199,10 @@ class Runner:
         self.created_files: set[str] = set()
         self.smb_created_files: set[str] = set()
 
+    def log_console(self, message: str) -> None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+        print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
+
     def close(self) -> None:
         if self.ssh_client is not None:
             self.ssh_client.close()
@@ -210,6 +214,11 @@ class Runner:
 
     def run(self) -> None:
         selected = self.resolve_selected_phases(self.args.mode)
+        selected_names = [name for name, _fn in selected]
+        self.log_console(
+            "START integration run: "
+            f"mode={self.args.mode}, phases={['phase_0_preflight', *selected_names, 'phase_6_cleanup']}"
+        )
         self.run_phase("phase_0_preflight", self.phase_0_preflight)
 
         for phase_name, phase_fn in selected:
@@ -224,6 +233,7 @@ class Runner:
             self.run_phase(phase_name, phase_fn)
 
         self.run_phase("phase_6_cleanup", self.phase_6_cleanup)
+        self.log_console("END integration run")
 
     def resolve_selected_phases(
         self, mode: str
@@ -257,6 +267,7 @@ class Runner:
     def run_phase(
         self, name: str, action: Callable[[], dict[str, Any]]
     ) -> None:
+        self.log_console(f"PHASE START: {name}")
         started = time.perf_counter()
         status = "passed"
         details: dict[str, Any] = {}
@@ -281,6 +292,10 @@ class Runner:
                 error=error,
             )
         )
+        summary = f"PHASE END: {name} -> {status} ({duration:.3f}s)"
+        if error:
+            summary = f"{summary}; reason={error}"
+        self.log_console(summary)
         if name == "phase_0_preflight" and status == "passed":
             self.preflight_ok = True
 
@@ -382,6 +397,7 @@ class Runner:
                 "status": "skipped",
                 "reason": "Skipped by --skip-remote-refresh.",
             }
+        self.log_console(f"REMOTE REFRESH: repo={repo_path}")
 
         repo_path_quoted = shlex.quote(repo_path)
         venv_dir = env_payload.get("CNC_VENV_DIR") or str(PurePosixPath(repo_path) / ".venv")
@@ -413,6 +429,7 @@ class Runner:
             timeout=self.args.remote_refresh_timeout,
             check=True,
         )
+        self.log_console("REMOTE REFRESH: git pull --ff-only done")
 
         head_after_result = self.ssh_exec(
             f"git -C {repo_path_quoted} rev-parse HEAD",
@@ -434,6 +451,7 @@ class Runner:
             timeout=self.args.remote_refresh_timeout,
             check=True,
         )
+        self.log_console("REMOTE REFRESH: editable install done")
 
         config_refresh_command = (
             "set -euo pipefail\n"
@@ -457,12 +475,14 @@ class Runner:
             timeout=self.args.remote_refresh_timeout,
             check=True,
         )
+        self.log_console("REMOTE REFRESH: setup_webui/setup_usb/setup_led done")
 
         selftest_report = self.run_remote_selftest_with_auto_repair(
             repo_path=repo_path,
             venv_dir=venv_dir,
             env_payload=env_payload,
         )
+        self.log_console("REMOTE REFRESH: cnc_selftest completed")
         selftest_result = selftest_report["result"]
         selftest_payload = selftest_report["payload"]
 
@@ -1715,6 +1735,7 @@ class Runner:
         assert self.session is not None
 
         endpoint = "net" if target_mode == "NET" else "usb"
+        self.log_console(f"MODE SWITCH: request {target_mode} via /{endpoint}")
         started = time.perf_counter()
 
         response = self.session.post(
@@ -1731,6 +1752,7 @@ class Runner:
         redirect_message = self.extract_redirect_message(response)
         api_status = self.wait_for_mode(target_mode, timeout_seconds=self.args.switch_timeout)
         duration = round(time.perf_counter() - started, 6)
+        self.log_console(f"MODE SWITCH: {target_mode} ready in {duration:.3f}s")
 
         return {
             "target_mode": target_mode,

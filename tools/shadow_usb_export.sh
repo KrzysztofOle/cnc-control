@@ -119,6 +119,6 @@ fi
 
 echo "Podłączanie USB Mass Storage (RO) dla SHADOW..."
 sudo modprobe g_mass_storage file="${ACTIVE_IMAGE}" removable=1 ro=1
-set_led_mode USB
+set_led_mode SHADOW_READY
 
 echo "[SHADOW EXPORT] Gotowe."

@@ -195,8 +195,8 @@ Mapowanie trybów:
 | Tryb | Kolor | Zachowanie |
 |---|---|---|
 | `BOOT` | żółty `(255, 180, 0)` | stały |
-| `USB` | czerwony `(255, 0, 0)` | stały |
-| `UPLOAD` | zielony `(0, 255, 0)` | stały |
+| `SHADOW_READY` | zielony `(0, 255, 0)` | stały |
+| `SHADOW_SYNC` | niebieski `(0, 0, 255)` | stały |
 | `AP` | niebieski `(0, 0, 255)` | mruganie `1 Hz` |
 | `ERROR` | czerwony `(255, 0, 0)` | szybkie mruganie `3 Hz` |
 | `IDLE` | biały przygaszony `(76, 76, 76)` | stały |

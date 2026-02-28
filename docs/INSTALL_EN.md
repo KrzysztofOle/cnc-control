@@ -195,8 +195,8 @@ Mode mapping:
 | Mode | Color | Behavior |
 |---|---|---|
 | `BOOT` | yellow `(255, 180, 0)` | steady |
-| `USB` | red `(255, 0, 0)` | steady |
-| `UPLOAD` | green `(0, 255, 0)` | steady |
+| `SHADOW_READY` | green `(0, 255, 0)` | steady |
+| `SHADOW_SYNC` | blue `(0, 0, 255)` | steady |
 | `AP` | blue `(0, 0, 255)` | blinking `1 Hz` |
 | `ERROR` | red `(255, 0, 0)` | fast blink `3 Hz` |
 | `IDLE` | dim white `(76, 76, 76)` | steady |
