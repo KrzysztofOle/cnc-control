@@ -605,6 +605,7 @@ body.ui-busy #loading-overlay * {
 
 <h3>Pliki CNC</h3>
 <form id="delete-files-form" action="/delete-files" method="post">
+  <input type="hidden" name="confirm_delete" id="confirm-delete-input" value="no">
   <ul id="cnc-files-list">
   {% for f in files %}
     <li>
@@ -981,6 +982,7 @@ body.ui-busy #loading-overlay * {
     if (!deleteButton) {
       return;
     }
+    const confirmInput = document.getElementById("confirm-delete-input");
     const checkboxes = Array.from(
       deleteForm.querySelectorAll('input[name="files"][type="checkbox"]')
     );
@@ -997,6 +999,46 @@ body.ui-busy #loading-overlay * {
     checkboxes.forEach((checkbox) => {
       checkbox.addEventListener("change", updateDeleteState);
     });
+
+    deleteForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (busy) {
+        return;
+      }
+      const selected = checkboxes.filter((checkbox) => checkbox.checked);
+      if (selected.length === 0) {
+        window.alert("Zaznacz co najmniej jeden plik do usuniecia.");
+        if (confirmInput) {
+          confirmInput.value = "no";
+        }
+        return;
+      }
+
+      const preview = selected
+        .slice(0, 5)
+        .map((checkbox) => checkbox.value)
+        .join(", ");
+      const suffix = selected.length > 5 ? ", ..." : "";
+      const message =
+        "Czy na pewno usunac " +
+        selected.length +
+        " plik(ow)?\n" +
+        preview +
+        suffix;
+      if (!window.confirm(message)) {
+        if (confirmInput) {
+          confirmInput.value = "no";
+        }
+        return;
+      }
+
+      if (confirmInput) {
+        confirmInput.value = "yes";
+      }
+      const request = buildRequest(deleteForm);
+      runAction(request);
+    });
+
     updateDeleteState();
   }
 
@@ -1923,32 +1965,12 @@ body.ui-busy #loading-overlay * {
     const forms = document.querySelectorAll("form");
     forms.forEach((form) => {
       form.addEventListener("submit", (event) => {
+        if (form.id === "delete-files-form") {
+          return;
+        }
         event.preventDefault();
         if (busy) {
           return;
-        }
-        if (form.id === "delete-files-form") {
-          const selected = Array.from(
-            form.querySelectorAll('input[name="files"][type="checkbox"]:checked')
-          );
-          if (selected.length === 0) {
-            window.alert("Zaznacz co najmniej jeden plik do usuniecia.");
-            return;
-          }
-          const preview = selected
-            .slice(0, 5)
-            .map((input) => input.value)
-            .join(", ");
-          const suffix = selected.length > 5 ? ", ..." : "";
-          const message =
-            "Czy na pewno usunac " +
-            selected.length +
-            " plik(ow)?\n" +
-            preview +
-            suffix;
-          if (!window.confirm(message)) {
-            return;
-          }
         }
         const request = buildRequest(form);
         runAction(request);
@@ -3146,6 +3168,10 @@ def delete_files():
 
     if not os.path.isdir(upload_dir):
         return redirect(url_for("index", msg="Katalog plikow CNC jest niedostepny"))
+
+    confirm_delete = (request.form.get("confirm_delete") or "").strip().casefold()
+    if confirm_delete not in {"yes", "true", "1", "on"}:
+        return redirect(url_for("index", msg="Kasowanie anulowane: brak potwierdzenia"))
 
     requested_files = request.form.getlist("files")
     unique_files = []
