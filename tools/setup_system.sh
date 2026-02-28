@@ -33,6 +33,10 @@ SAMBA_SHARE_NAME="cnc_usb"
 SAMBA_SHARE_PATH_DEFAULT="/mnt/cnc_usb"
 SAMBA_SHARE_PATH="${SAMBA_SHARE_PATH_DEFAULT}"
 SHADOW_MASTER_DIR_DEFAULT="/var/lib/cnc-control/master"
+SAMBA_FORCE_USER=""
+SAMBA_FORCE_GROUP=""
+SAMBA_FORCE_USER_LINE=""
+SAMBA_FORCE_GROUP_LINE=""
 CLOUD_INIT_UNITS=(
     cloud-init-local.service
     cloud-init.service
@@ -141,6 +145,41 @@ resolve_samba_share_path() {
     fi
 
     printf '%s' "${share_path}"
+}
+
+resolve_samba_force_identity() {
+    local share_path="$1"
+    local owner_user=""
+    local owner_group=""
+
+    SAMBA_FORCE_USER=""
+    SAMBA_FORCE_GROUP=""
+    SAMBA_FORCE_USER_LINE=""
+    SAMBA_FORCE_GROUP_LINE=""
+
+    if [ ! -e "${share_path}" ]; then
+        return 0
+    fi
+
+    owner_user="$(stat -c '%U' "${share_path}" 2>/dev/null || true)"
+    owner_group="$(stat -c '%G' "${share_path}" 2>/dev/null || true)"
+
+    owner_user="$(printf '%s' "${owner_user}" | tr -d '\r\n')"
+    owner_group="$(printf '%s' "${owner_group}" | tr -d '\r\n')"
+
+    if [ -n "${owner_user}" ] && [ "${owner_user}" != "UNKNOWN" ] && id -u "${owner_user}" >/dev/null 2>&1; then
+        SAMBA_FORCE_USER="${owner_user}"
+    fi
+    if [ -n "${owner_group}" ] && [ "${owner_group}" != "UNKNOWN" ] && getent group "${owner_group}" >/dev/null 2>&1; then
+        SAMBA_FORCE_GROUP="${owner_group}"
+    fi
+
+    if [ -n "${SAMBA_FORCE_USER}" ]; then
+        SAMBA_FORCE_USER_LINE="   force user = ${SAMBA_FORCE_USER}"
+    fi
+    if [ -n "${SAMBA_FORCE_GROUP}" ]; then
+        SAMBA_FORCE_GROUP_LINE="   force group = ${SAMBA_FORCE_GROUP}"
+    fi
 }
 
 has_dwc2_overlay_in_all_section() {
@@ -363,6 +402,13 @@ set +a
 SAMBA_SHARE_PATH="$(resolve_samba_share_path)"
 echo "[INFO] Samba share path: ${SAMBA_SHARE_PATH}"
 mkdir -p "${SAMBA_SHARE_PATH}"
+resolve_samba_force_identity "${SAMBA_SHARE_PATH}"
+if [ -n "${SAMBA_FORCE_USER}" ]; then
+    echo "[INFO] Samba force user: ${SAMBA_FORCE_USER}"
+fi
+if [ -n "${SAMBA_FORCE_GROUP}" ]; then
+    echo "[INFO] Samba force group: ${SAMBA_FORCE_GROUP}"
+fi
 
 chown root:root /var/lib/cnc-control
 chmod 755 /var/lib/cnc-control
@@ -471,6 +517,8 @@ if command -v smbd >/dev/null 2>&1; then
    browseable = yes
    read only = no
    guest ok = yes
+${SAMBA_FORCE_USER_LINE}
+${SAMBA_FORCE_GROUP_LINE}
    create mask = 0664
    directory mask = 0775
 SMB
