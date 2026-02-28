@@ -889,6 +889,13 @@ check_samba_unit() {
             disabled|masked|static|indirect|generated|alias)
                 add_check "samba" "WARN" "PASS" "${unit} enabled" "${enabled_state}"
                 ;;
+            enabled)
+                if [ "${active_state}" != "active" ]; then
+                    add_check "samba" "WARN" "PASS" "${unit} enabled" "${enabled_state}; tolerated because service is inactive"
+                else
+                    add_check "samba" "WARN" "WARN" "${unit} enabled" "${enabled_state}; expected disabled/masked"
+                fi
+                ;;
             *)
                 add_check "samba" "WARN" "WARN" "${unit} enabled" "${enabled_state}; expected disabled/masked"
                 ;;
@@ -1221,13 +1228,41 @@ check_recent_journal_errors() {
     fi
 }
 
+check_system_cnc_journal_errors() {
+    local output=""
+    local rc=0
+    local filtered=""
+    local compact=""
+    local cnc_pattern='cnc[-_]|cnc-control|usb_mode|net_mode|shadow|led_status|webui'
+
+    output="$(journalctl --no-pager -n 200 -p 3 2>&1)"
+    rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        compact="$(compact_output "${output}")"
+        if printf '%s' "${compact}" | grep -Eiq 'access denied|permission denied|not permitted'; then
+            add_check "logs" "WARN" "WARN" "System journal access" "${compact}"
+        else
+            add_check "logs" "WARN" "WARN" "System journal access" "journalctl rc=${rc}; ${compact}"
+        fi
+        return
+    fi
+
+    filtered="$(printf '%s\n' "${output}" | grep -Eai "${cnc_pattern}" || true)"
+    compact="$(compact_output "${filtered}")"
+    if [ -z "${compact}" ]; then
+        add_check "logs" "CRITICAL" "PASS" "System CNC journal errors (last 200)" "none"
+    else
+        add_check "logs" "CRITICAL" "FAIL" "System CNC journal errors (last 200)" "${compact}"
+    fi
+}
+
 check_logs() {
     if ! command_available "journalctl"; then
         add_check "logs" "WARN" "WARN" "journalctl available" "Command not available"
         return
     fi
 
-    check_recent_journal_errors "System"
+    check_system_cnc_journal_errors
     check_recent_journal_errors "cnc-usb.service" -u "cnc-usb.service"
     check_recent_journal_errors "cnc-webui.service" -u "cnc-webui.service"
     check_recent_journal_errors "cnc-led.service" -u "cnc-led.service"
