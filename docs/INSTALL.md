@@ -172,10 +172,12 @@ gotowosc do pracy, a nie pelna usluga przegladania sieci.
 
 ## Tryby pracy
 
-- **USB (CNC)** – Raspberry Pi udostępnia obraz jako pamięć masowa USB dla kontrolera.
-- **NET (UPLOAD)** – upload plików G-code przez sieć, bez trybu USB.
+- **SHADOW (obowiązujący)** – aktualny tryb produkcyjny i domyślna ścieżka rozwoju projektu.
+- **NET/USB (legacy)** – historyczny tryb ręcznego przełączania upload/USB.
 
-Tryb jest przełączany przez skrypty `usb_mode.sh` i `net_mode.sh`.
+Tryb `NET/USB` jest stopniowo wycofywany i pozostaje wyłącznie dla kompatybilności wstecznej.
+W nowych instalacjach używaj trybu SHADOW.
+Skrypty `usb_mode.sh` i `net_mode.sh` traktuj jako warstwę kompatybilności podczas migracji i diagnostyki.
 
 ## LED Status Indicator
 
@@ -234,7 +236,7 @@ Poniższe decyzje skracają boot i ograniczają niepotrzebne zależności:
   `sudo systemctl disable NetworkManager-wait-online.service`.
 - Moduły `dwc2`, `g_mass_storage`, `g_ether` nie mogą być aktywowane statycznie w
   `/boot/config.txt` ani `/boot/cmdline.txt` — gadget ma być ładowany wyłącznie dynamicznie
-  przez `usb_mode.sh`.
+  przez usługę `cnc-usb.service` / logikę runtime (SHADOW lub legacy).
 - ZeroTier nie powinien blokować startu; jeśli jego unit ma `After=network-online.target`,
   ustaw override na `network.target` (np. `sudo systemctl edit zerotier-one`):
 
@@ -244,8 +246,9 @@ After=network.target
 Wants=network.target
 ```
 
-Zalecany restart: przełącz na tryb sieciowy (`net_mode.sh`), odczekaj na odmontowanie obrazu,
-a następnie wykonaj `sudo systemctl reboot` (lub `sudo reboot`) z SSH/terminala.
+Zalecany restart: zatrzymaj aktywny eksport USB (w środowisku legacy: `net_mode.sh`),
+odczekaj na odmontowanie obrazu, a następnie wykonaj `sudo systemctl reboot`
+(lub `sudo reboot`) z SSH/terminala.
 
 ## Ukryte pliki systemowe
 

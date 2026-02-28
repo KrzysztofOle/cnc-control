@@ -171,10 +171,12 @@ more important than full network browsing features.
 
 ## Operating modes
 
-- **USB (CNC)** – Raspberry Pi exposes the image as a USB mass storage device for the controller.
-- **NET (UPLOAD)** – G-code upload over the network, without USB mode.
+- **SHADOW (current)** – the active production mode and default project direction.
+- **NET/USB (legacy)** – historical manual upload/USB switching mode.
 
-Modes are switched by the `usb_mode.sh` and `net_mode.sh` scripts.
+`NET/USB` mode is being gradually phased out and kept only for backward compatibility.
+Use SHADOW for new deployments.
+Treat `usb_mode.sh` and `net_mode.sh` as compatibility tools for migration and diagnostics.
 
 ## LED Status Indicator
 
@@ -232,7 +234,8 @@ The following choices shorten boot time and reduce unnecessary dependencies:
   or reboot (especially without active DHCP/link):
   `sudo systemctl disable NetworkManager-wait-online.service`.
 - `dwc2`, `g_mass_storage`, `g_ether` must not be enabled statically in `/boot/config.txt`
-  or `/boot/cmdline.txt` — the gadget should be loaded dynamically only by `usb_mode.sh`.
+  or `/boot/cmdline.txt` — the gadget should be loaded dynamically by `cnc-usb.service`
+  / runtime logic (SHADOW or legacy).
 - ZeroTier must not block boot; if its unit uses `After=network-online.target`, add an override
   with `network.target` (e.g. `sudo systemctl edit zerotier-one`):
 
@@ -242,8 +245,9 @@ After=network.target
 Wants=network.target
 ```
 
-Recommended reboot: switch to network mode (`net_mode.sh`), wait for the image to unmount,
-then run `sudo systemctl reboot` (or `sudo reboot`) from SSH/terminal.
+Recommended reboot: stop active USB export first (in legacy setups: `net_mode.sh`),
+wait for the image to unmount, then run `sudo systemctl reboot` (or `sudo reboot`)
+from SSH/terminal.
 
 ## Hidden system files
 

@@ -25,6 +25,13 @@ The project is developed as a **practical workshop-oriented solution**, not as a
 > ⚠️ The project **does not interfere** with RichAuto controller PLC logic.  
 > It acts solely as a supporting system.
 
+## 📣 Mode Status
+
+- `SHADOW` is the current and recommended operating mode.
+- `NET/USB` switching (`net_mode.sh` / `usb_mode.sh`) is **legacy**.
+- `NET/USB` mode is being gradually phased out and kept only for backward compatibility.
+- Target mode specification: `docs/SHADOW_MODE.md`.
+
 ---
 
 ## 🖥️ Hardware Requirements
@@ -150,14 +157,14 @@ The tag description is displayed in the WebUI.
 
 ## ⌨️ Shortcut Commands (CLI)
 
-To run modes with single commands (`usb_mode`, `net_mode`, `status`, `cnc_selftest`), install shortcuts:
+For backward compatibility, shortcut commands are still available (`usb_mode`, `net_mode`, `status`, `cnc_selftest`):
 
 ```bash
 chmod +x tools/setup_commands.sh
 ./tools/setup_commands.sh
 ```
 
-The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh`, `tools/cnc_selftest.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc` and `~/.zshrc`).
+The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh`, `tools/cnc_selftest.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc` and `~/.zshrc`). For new deployments, use `SHADOW`.
 
 ## Diagnostics
 
@@ -171,7 +178,7 @@ cnc_selftest --json
 
 ## 🧩 systemd Services (Autostart)
 
-To start webui and USB mode automatically after boot, use:
+To start webui and the USB export service automatically after boot (including SHADOW flow), use:
 
 ```bash
 chmod +x tools/setup_webui.sh
@@ -270,7 +277,7 @@ Configuration is centrally managed via:
 /etc/cnc-control/cnc-control.env
 ```
 
-This file is loaded by systemd (`EnvironmentFile=`), mode scripts (`net_mode.sh`, `usb_mode.sh`), and WebUI (`webui/app.py`). Missing file or required variables cause explicit errors.
+This file is loaded by systemd (`EnvironmentFile=`), SHADOW/WebUI logic, and compatibility scripts (`net_mode.sh`, `usb_mode.sh`). Missing file or required variables cause explicit errors.
 
 Quick start:
 
@@ -284,16 +291,16 @@ Required variables (no defaults):
 
 | Variable | Description | Default | Usage |
 |---|---|---|---|
-| `CNC_USB_IMG` | Path to USB Mass Storage image | none (required) | `net_mode.sh`, `usb_mode.sh` |
-| `CNC_MOUNT_POINT` | Image mount point (G-code upload) | none (required) | `net_mode.sh`, `usb_mode.sh` |
+| `CNC_USB_IMG` | Path to USB Mass Storage image | none (required) | `net_mode.sh`, `usb_mode.sh` (legacy) |
+| `CNC_MOUNT_POINT` | Image mount point (G-code upload) | none (required) | `net_mode.sh`, `usb_mode.sh` (legacy) |
 | `CNC_UPLOAD_DIR` | WebUI upload directory | none (required) | `webui/app.py` |
 
 Optional variables:
 
 | Variable | Description | Default | Usage |
 |---|---|---|---|
-| `CNC_NET_MODE_SCRIPT` | Path to network mode script | `<repo>/net_mode.sh` | `webui/app.py` |
-| `CNC_USB_MODE_SCRIPT` | Path to USB mode script | `<repo>/usb_mode.sh` | `webui/app.py` |
+| `CNC_NET_MODE_SCRIPT` | Path to network mode script (legacy) | `<repo>/net_mode.sh` | `webui/app.py` |
+| `CNC_USB_MODE_SCRIPT` | Path to USB mode script (legacy) | `<repo>/usb_mode.sh` | `webui/app.py` |
 | `CNC_CONTROL_REPO` | Repository path (for `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
 | `CNC_WEBUI_LOG` | WebUI log file path | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | systemd unit name for webui | `cnc-webui.service` | `webui/app.py` |
@@ -341,11 +348,11 @@ cnc-control/
 | `config/cnc-control.env.example` | Example central configuration (EnvironmentFile). |
 | `led_status.py` | WS2812 LED daemon (GPIO18) monitoring IPC and driving LED state. |
 | `led_status_cli.py` | CLI for LED mode IPC writes (`/tmp/cnc_led_mode`). |
-| `net_mode.sh` | Switches network mode (host/gadget). |
+| `net_mode.sh` | Legacy: switches network mode (host/gadget). |
 | `status.sh` | Quick status view of the system/connections. |
-| `usb_mode.sh` | Switches USB mode for Raspberry Pi. |
+| `usb_mode.sh` | Legacy: switches USB mode for Raspberry Pi. |
 | `tools/` | Helper scripts for environment setup. |
-| `tools/setup_commands.sh` | Installs shortcut commands `usb_mode`, `net_mode`, `status`. |
+| `tools/setup_commands.sh` | Installs shortcut commands (`usb_mode` and `net_mode` as legacy) and `status`. |
 | `tools/setup_led_service.sh` | Configures `cnc-led.service` for `led_status.py`. |
 | `tools/setup_usb_service.sh` | Configures `cnc-usb.service` for `usb_mode.sh`. |
 | `tools/setup_webui.sh` | Configures `cnc-webui.service` for webui. |

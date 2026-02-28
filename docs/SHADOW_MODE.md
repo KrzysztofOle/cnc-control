@@ -664,11 +664,12 @@ Rollback z A/B do single-slot:
 4. przywrócić konfigurację single-slot,
 5. zweryfikować poprawność eksportu.
 
-## Strategia implementacji – tryb równoległy
+## Strategia implementacji – tryb docelowy
 
-- SHADOW nie zastępuje trybu NET/USB.
-- SHADOW jest alternatywnym trybem startowym.
-- Przełączanie między trybami odbywa się wyłącznie przez konfigurację (`CNC_SHADOW_ENABLED`).
+- SHADOW zastępuje historyczny tryb przełączania NET/USB jako tryb obowiązujący.
+- Tryb NET/USB pozostaje warstwą legacy i jest stopniowo wycofywany.
+- Dla nowych wdrożeń obowiązuje konfiguracja `CNC_SHADOW_ENABLED=true`.
+- Konfiguracja `CNC_SHADOW_ENABLED=false` jest dopuszczalna wyłącznie dla kompatybilności i migracji.
 
 ## Parametry konfiguracyjne
 
