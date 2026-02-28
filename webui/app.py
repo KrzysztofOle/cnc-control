@@ -3532,13 +3532,21 @@ def download_startup_log():
     except Exception:
         return redirect_to_next("Błąd pobierania logu startowego")
 
-def start_net_usb():
+def start_webui():
     app.run(host="0.0.0.0", port=8080)
+
+
+def start_shadow_mode():
+    from shadow.runtime_registry import set_shadow_manager
+    from shadow.shadow_manager import ShadowManager
+
+    shadow_manager = ShadowManager.from_environment(os.environ)
+    set_shadow_manager(shadow_manager)
+    shadow_manager.start()
+    start_webui()
 
 
 if __name__ == "__main__":
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, REPO_ROOT)
-    from mode_selector import ModeSelector
-
-    ModeSelector().start()
+    start_shadow_mode()
