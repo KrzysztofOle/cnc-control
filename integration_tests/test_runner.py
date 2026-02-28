@@ -38,6 +38,8 @@ def parse_status_mode(output: str) -> str | None:
         if "Tryb pracy:" not in line:
             continue
         value = line.split("Tryb pracy:", 1)[1].strip().casefold()
+        if value.startswith("shadow"):
+            return "SHADOW"
         if value.startswith("usb"):
             return "USB"
         if value.startswith("siec") or value.startswith("sieć"):
@@ -763,7 +765,7 @@ class Runner:
 
     def filter_cnc_journal_lines(self, journal_lines: list[str]) -> list[str]:
         pattern = re.compile(
-            r"(cnc[-_]|cnc-control|usb_mode|net_mode|shadow|led_status|webui)",
+            r"(cnc[-_]|cnc-control|shadow|shadow_usb_export|led_status|webui)",
             flags=re.IGNORECASE,
         )
         return [line for line in journal_lines if pattern.search(line)]

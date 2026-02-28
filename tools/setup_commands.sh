@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-COMMANDS=("usb_mode" "net_mode" "status" "cnc_selftest")
-SCRIPTS=("usb_mode.sh" "net_mode.sh" "status.sh" "tools/cnc_selftest.sh")
+COMMANDS=("status" "cnc_selftest")
+SCRIPTS=("status.sh" "tools/cnc_selftest.sh")
 
 TARGET_DIR=""
 USE_SUDO="false"
@@ -92,4 +92,4 @@ if [ ! -f "${CURRENT_HOME}/.bashrc" ] && [ ! -f "${CURRENT_HOME}/.zshrc" ]; then
     echo "Dodano alias selftest do ${BASHRC}. Uruchom: source ${BASHRC}"
 fi
 
-echo "Gotowe. Komendy dostepne: usb_mode, net_mode, status, cnc_selftest"
+echo "Gotowe. Komendy dostepne: status, cnc_selftest"

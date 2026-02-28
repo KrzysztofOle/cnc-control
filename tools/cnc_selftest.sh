@@ -1233,7 +1233,7 @@ check_system_cnc_journal_errors() {
     local rc=0
     local filtered=""
     local compact=""
-    local cnc_pattern='cnc[-_]|cnc-control|usb_mode|net_mode|shadow|led_status|webui'
+    local cnc_pattern='cnc[-_]|cnc-control|shadow|shadow_usb_export|led_status|webui'
 
     output="$(journalctl --no-pager -n 200 -p 3 2>&1)"
     rc=$?

@@ -173,12 +173,7 @@ gotowosc do pracy, a nie pelna usluga przegladania sieci.
 
 ## Tryby pracy
 
-- **SHADOW (obowiązujący)** – aktualny tryb produkcyjny i domyślna ścieżka rozwoju projektu.
-- **NET/USB (legacy)** – historyczny tryb ręcznego przełączania upload/USB.
-
-Tryb `NET/USB` jest stopniowo wycofywany i pozostaje wyłącznie dla kompatybilności wstecznej.
-W nowych instalacjach używaj trybu SHADOW.
-Skrypty `usb_mode.sh` i `net_mode.sh` traktuj jako warstwę kompatybilności podczas migracji i diagnostyki.
+- **SHADOW (obowiązujący)** – jedyny wspierany tryb produkcyjny i domyślna ścieżka rozwoju projektu.
 
 ## LED Status Indicator
 
@@ -247,7 +242,7 @@ After=network.target
 Wants=network.target
 ```
 
-Zalecany restart: zatrzymaj aktywny eksport USB (w środowisku legacy: `net_mode.sh`),
+Zalecany restart: zatrzymaj aktywny eksport USB przez `sudo systemctl stop cnc-usb.service`,
 odczekaj na odmontowanie obrazu, a następnie wykonaj `sudo systemctl reboot`
 (lub `sudo reboot`) z SSH/terminala.
 

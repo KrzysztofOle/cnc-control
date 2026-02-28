@@ -160,6 +160,7 @@ The tag description is displayed in the WebUI.
 
 ```bash
 ./status.sh
+./tools/shadow_usb_export.sh
 ./tools/cnc_selftest.sh
 ./tools/cnc_selftest.sh --verbose
 ./tools/cnc_selftest.sh --json
@@ -286,7 +287,6 @@ Required variables for SHADOW-only mode:
 | `CNC_MASTER_DIR` | SHADOW working directory (file source) | `/var/lib/cnc-control/master` | `shadow/watcher_service.py`, `shadow/rebuild_engine.py` |
 | `CNC_USB_IMG_A` | USB image path for slot A | `/var/lib/cnc-control/cnc_usb_a.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
 | `CNC_USB_IMG_B` | USB image path for slot B | `/var/lib/cnc-control/cnc_usb_b.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
-| `CNC_UPLOAD_DIR` | WebUI upload directory | none (required) | `webui/app.py`, `tools/cnc_selftest.sh` |
 
 Optional variables:
 
@@ -327,6 +327,7 @@ cnc-control/
 │   ├── setup_usb_service.sh
 │   ├── setup_webui.sh
 │   ├── setup_nmtui.sh
+│   ├── shadow_usb_export.sh
 │   └── setup_zerotier.sh
 └── webui/
     └── app.py
@@ -346,6 +347,7 @@ cnc-control/
 | `led_status_cli.py` | CLI for LED mode IPC writes (`/tmp/cnc_led_mode`). |
 | `status.sh` | Quick status view of the system/connections. |
 | `tools/` | Helper scripts for environment setup. |
+| `tools/shadow_usb_export.sh` | Starts SHADOW USB export based on the active slot. |
 | `tools/setup_led_service.sh` | Configures `cnc-led.service` for `led_status.py`. |
 | `tools/setup_usb_service.sh` | Configures `cnc-usb.service` for SHADOW export. |
 | `tools/setup_webui.sh` | Configures `cnc-webui.service` for webui. |

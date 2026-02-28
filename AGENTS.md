@@ -117,7 +117,7 @@ Następnie:
 - przechodzi do katalogu repozytorium `cnc-control`,
 - wykonuje `git pull`,
 - aktualizuje środowisko (jeśli wymagane),
-- uruchamia odpowiednie skrypty (`usb_mode.sh`, `net_mode.sh`, `status.sh`),
+- uruchamia odpowiednie skrypty (`tools/shadow_usb_export.sh`, `status.sh`),
 - przeprowadza testy diagnostyczne,
 - weryfikuje konfigurację systemową oraz usługi systemd.
 

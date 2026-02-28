@@ -165,7 +165,7 @@ run_as_root bash "${REPO_DIR}/tools/setup_commands.sh"
 echo "[8/9] Instalacja menu Wi-Fi (nmtui + komenda wifi)"
 run_as_root env SUDO_USER="${INSTALL_USER}" bash "${REPO_DIR}/tools/setup_nmtui.sh"
 
-echo "[9/9] Instalacja uslug systemd (WebUI + USB + LED)"
+echo "[9/9] Instalacja uslug systemd (WebUI + SHADOW USB Export + LED)"
 run_as_root env SUDO_USER="${INSTALL_USER}" CNC_VENV_DIR="${VENV_DIR}" bash "${REPO_DIR}/tools/setup_webui.sh" "${REPO_DIR}"
 if run_as_root bash "${REPO_DIR}/tools/setup_usb_service.sh" "${REPO_DIR}"; then
     echo "[INFO] Usluga USB zainstalowana."

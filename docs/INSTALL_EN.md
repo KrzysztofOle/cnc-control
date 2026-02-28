@@ -172,12 +172,7 @@ more important than full network browsing features.
 
 ## Operating modes
 
-- **SHADOW (current)** – the active production mode and default project direction.
-- **NET/USB (legacy)** – historical manual upload/USB switching mode.
-
-`NET/USB` mode is being gradually phased out and kept only for backward compatibility.
-Use SHADOW for new deployments.
-Treat `usb_mode.sh` and `net_mode.sh` as compatibility tools for migration and diagnostics.
+- **SHADOW (current)** – the only supported production mode and default project direction.
 
 ## LED Status Indicator
 
@@ -246,7 +241,7 @@ After=network.target
 Wants=network.target
 ```
 
-Recommended reboot: stop active USB export first (in legacy setups: `net_mode.sh`),
+Recommended reboot: stop active USB export via `sudo systemctl stop cnc-usb.service`,
 wait for the image to unmount, then run `sudo systemctl reboot` (or `sudo reboot`)
 from SSH/terminal.
 

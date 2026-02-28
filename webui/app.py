@@ -57,21 +57,6 @@ def parse_env_bool(value, default=False):
 ENV_FILE_PATH = os.environ.get("CNC_ENV_FILE", "/etc/cnc-control/cnc-control.env")
 load_environment_file(ENV_FILE_PATH)
 
-UPLOAD_DIR = os.environ.get("CNC_UPLOAD_DIR")
-if not UPLOAD_DIR:
-    app.logger.error("Brak zmiennej CNC_UPLOAD_DIR. Upload i lista plikow beda niedostepne.")
-NET_MODE_SCRIPT = os.environ.get(
-    "CNC_NET_MODE_SCRIPT",
-    os.path.join(REPO_ROOT, "net_mode.sh"),
-)
-USB_MODE_SCRIPT = os.environ.get(
-    "CNC_USB_MODE_SCRIPT",
-    os.path.join(REPO_ROOT, "usb_mode.sh"),
-)
-STATUS_SCRIPT = os.environ.get(
-    "CNC_STATUS_SCRIPT",
-    os.path.join(REPO_ROOT, "status.sh"),
-)
 WIFI_CONTROL_SCRIPT = os.environ.get(
     "CNC_WIFI_CONTROL_SCRIPT",
     os.path.join(REPO_ROOT, "tools", "wifi_control.sh"),
@@ -98,6 +83,8 @@ SHADOW_MASTER_DIR = os.environ.get(
     "CNC_MASTER_DIR",
     "/var/lib/cnc-control/master",
 )
+if not SHADOW_MASTER_DIR:
+    app.logger.error("Brak zmiennej CNC_MASTER_DIR. Upload i lista plikow beda niedostepne.")
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     REPO_ROOT,
@@ -197,34 +184,11 @@ HTML = """
 <html>
 <head>
 <style>
-.indicator {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  margin-right: 6px;
-}
-.indicator--net { background-color: #3498db; }
-.indicator--usb { background-color: #e67e22; }
-.indicator--inactive { background-color: #bdc3c7; }
-
 .mode-label {
   display: inline-block;
   padding: 2px 10px;
   border-radius: 10px;
   font-weight: 600;
-}
-
-.mode-net {
-  color: #1f4f7a;
-  background: #e3f2fd;
-  border: 1px solid #90caf9;
-}
-
-.mode-usb {
-  color: #8a4f0a;
-  background: #fff3e0;
-  border: 1px solid #ffcc80;
 }
 
 .mode-shadow {
@@ -555,11 +519,7 @@ body.ui-busy #loading-overlay * {
 {% if page != 'system' %}
 <h3>Operacje CNC</h3>
 <p><b>Tryb:</b>
-  {% if mode == 'SIEĆ (UPLOAD)' %}
-    <span id="mode-label" class="mode-label mode-net">{{ mode }}</span>
-  {% elif mode == 'USB (CNC)' %}
-    <span id="mode-label" class="mode-label mode-usb">{{ mode }}</span>
-  {% elif mode == 'SHADOW (A/B)' %}
+  {% if mode == 'SHADOW (A/B)' %}
     <span id="mode-label" class="mode-label mode-shadow">{{ mode }}</span>
   {% else %}
     <span id="mode-label" class="mode-label mode-unknown">{{ mode }}</span>
@@ -587,18 +547,6 @@ body.ui-busy #loading-overlay * {
 {% else %}
 <p id="shadow-error-line" style="display:none;"><b>SHADOW ERROR:</b> <span id="shadow-error-code"></span> - <span id="shadow-error-message"></span></p>
 {% endif %}
-{% endif %}
-
-{% if not shadow_enabled %}
-<form action="/net" method="post">
-  <span class="indicator {{ 'indicator--net' if mode == 'SIEĆ (UPLOAD)' else 'indicator--inactive' }}" data-mode-indicator="NET"></span>
-  <button type="submit" data-mode-switch="NET">Tryb sieć (upload)</button>
-</form>
-
-<form action="/usb" method="post">
-  <span class="indicator {{ 'indicator--usb' if mode == 'USB (CNC)' else 'indicator--inactive' }}" data-mode-indicator="USB"></span>
-  <button type="submit" data-mode-switch="USB">Tryb USB (CNC)</button>
-</form>
 {% endif %}
 
 <hr>
@@ -643,8 +591,6 @@ body.ui-busy #loading-overlay * {
   <button
     type="button"
     id="restart-gui-button"
-    title="Niedostępne w trybie USB"
-    disabled
   >
     🔄 Restart GUI
   </button>
@@ -867,13 +813,8 @@ body.ui-busy #loading-overlay * {
     if (!button) {
       return;
     }
-    const isUsb = mode === "USB";
-    button.disabled = isUsb;
-    if (isUsb) {
-      button.title = "Niedostępne w trybie USB";
-    } else {
-      button.removeAttribute("title");
-    }
+    button.disabled = false;
+    button.removeAttribute("title");
   }
 
   async function restartGui() {
@@ -1068,18 +1009,10 @@ body.ui-busy #loading-overlay * {
   }
 
   const MODE_LABELS = {
-    NET: "SIEĆ (UPLOAD)",
-    USB: "USB (CNC)",
     SHADOW: "SHADOW (A/B)",
   };
   const MODE_CLASS = {
-    NET: "mode-net",
-    USB: "mode-usb",
     SHADOW: "mode-shadow",
-  };
-  const INDICATOR_CLASS = {
-    NET: "indicator--net",
-    USB: "indicator--usb",
   };
   let lastShadowRunId = null;
   let shadowFileRefreshPending = false;
@@ -1093,21 +1026,10 @@ body.ui-busy #loading-overlay * {
     const modeLabel = document.getElementById("mode-label");
     if (modeLabel) {
       modeLabel.textContent = label;
-      modeLabel.classList.remove("mode-net", "mode-usb", "mode-shadow", "mode-unknown");
+      modeLabel.classList.remove("mode-shadow", "mode-unknown");
       modeLabel.classList.add(MODE_CLASS[mode] || "mode-unknown");
     }
     updateRestartGuiButton(mode);
-    const indicators = document.querySelectorAll("[data-mode-indicator]");
-    indicators.forEach((indicator) => {
-      const indicatorMode = indicator.getAttribute("data-mode-indicator");
-      const isActive = indicatorMode === mode;
-      indicator.classList.remove("indicator--net", "indicator--usb", "indicator--inactive");
-      if (isActive) {
-        indicator.classList.add(INDICATOR_CLASS[mode] || "indicator--inactive");
-      } else {
-        indicator.classList.add("indicator--inactive");
-      }
-    });
   }
 
   function shadowFsmGroup(fsmState) {
@@ -2075,10 +1997,6 @@ body.ui-busy #loading-overlay * {
 </html>
 """
 
-def is_usb_mode():
-    return subprocess.call("lsmod | grep -q g_mass_storage", shell=True) == 0
-
-
 def is_hidden_file(name):
     return name.startswith(".") or name in HIDDEN_NAMES
 
@@ -2125,32 +2043,8 @@ def ap_disabled_response(endpoint_name):
     return jsonify({"error": message}), 403
 
 
-def parse_status_mode(output):
-    for line in output.splitlines():
-        if "Tryb pracy:" not in line:
-            continue
-        value = line.split("Tryb pracy:", 1)[1].strip()
-        value_norm = value.casefold()
-        if value_norm.startswith("usb"):
-            return "USB"
-        if value_norm.startswith("sieć") or value_norm.startswith("siec"):
-            return "NET"
-    return None
-
-
-def parse_status_mount_point(output):
-    for line in output.splitlines():
-        if not line.startswith("Punkt montowania:"):
-            continue
-        value = line.split("Punkt montowania:", 1)[1].strip()
-        return value or None
-    return None
-
-
 def get_upload_directory():
-    if CNC_SHADOW_ENABLED:
-        return SHADOW_MASTER_DIR
-    return UPLOAD_DIR
+    return SHADOW_MASTER_DIR
 
 
 def read_shadow_state():
@@ -2354,42 +2248,6 @@ def run_wifi_control(args, timeout=20):
         timeout=timeout,
         check=False,
     )
-
-
-def is_mount_active(mount_point):
-    if not mount_point:
-        return None
-    result = subprocess.run(
-        ["mount"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        app.logger.warning("Nie mozna odczytac listy montowan (rc=%s).", result.returncode)
-        return None
-    needle = f" on {mount_point} "
-    for line in (result.stdout or "").splitlines():
-        if needle in line:
-            return True
-    return False
-
-
-def is_samba_active():
-    if not shutil.which("systemctl"):
-        app.logger.warning("Brak systemctl - nie mozna sprawdzic smbd.")
-        return None
-    result = subprocess.run(
-        ["systemctl", "is-active", "smbd.service"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0 and (result.stdout or "").strip() == "active":
-        return True
-    if result.returncode != 0 and (result.stdout or "").strip() == "unknown":
-        app.logger.warning("smbd.service nie istnieje w systemd.")
-    return False
 
 
 def run_systemctl_command(args, timeout=10):
@@ -2679,38 +2537,6 @@ def redirect_to_next(message=None):
     return redirect(url_for("index"))
 
 
-def run_mode_script(script_path, mode_label):
-    try:
-        result = subprocess.run(
-            [script_path],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as exc:
-        app.logger.error("Nie mozna uruchomic skryptu trybu %s: %s", mode_label, exc)
-        return False, f"Blad przelaczania na tryb: {mode_label}"
-
-    stdout = (result.stdout or "").strip()
-    stderr = (result.stderr or "").strip()
-    if result.returncode != 0:
-        app.logger.error(
-            "Skrypt trybu %s zakonczyl sie bledem (rc=%s). stdout='%s' stderr='%s'",
-            mode_label,
-            result.returncode,
-            stdout,
-            stderr,
-        )
-        detail = stderr or stdout
-        if detail:
-            return False, f"Blad trybu {mode_label}: {detail}"
-        return False, f"Blad przelaczania na tryb: {mode_label}"
-
-    if stderr:
-        app.logger.warning("Skrypt trybu %s stderr: %s", mode_label, stderr)
-    return True, None
-
-
 @app.route("/")
 def index():
     upload_dir = get_upload_directory()
@@ -2721,19 +2547,14 @@ def index():
     shadow_fsm_class = "unknown"
     if shadow_state:
         shadow_fsm_class = shadow_fsm_group(shadow_state.get("fsm_state"))
-    if CNC_SHADOW_ENABLED:
-        mode = "SHADOW (A/B)"
-    else:
-        usb = is_usb_mode()
-        mode = "USB (CNC)" if usb else "SIEĆ (UPLOAD)"
+    mode = "SHADOW (A/B)" if CNC_SHADOW_ENABLED else "SHADOW (A/B) [DISABLED]"
     files = []
     message = request.args.get("msg")
     version_data = get_app_version()
     if not upload_dir and not message:
-        if CNC_SHADOW_ENABLED:
-            message = "Brak konfiguracji CNC_MASTER_DIR"
-        else:
-            message = "Brak konfiguracji CNC_UPLOAD_DIR"
+        message = "Brak konfiguracji CNC_MASTER_DIR"
+    if not CNC_SHADOW_ENABLED and not message:
+        message = "Tryb SHADOW jest wylaczony w konfiguracji (CNC_SHADOW_ENABLED=false)."
     if upload_dir and os.path.isdir(upload_dir):
         files = sorted(
             [name for name in os.listdir(upload_dir) if not is_hidden_file(name)],
@@ -2785,79 +2606,24 @@ def system():
         shadow_history=shadow_history,
     )
 
-@app.route("/net", methods=["POST"])
-def net():
-    if CNC_SHADOW_ENABLED:
-        return redirect(url_for("index", msg="Tryb SHADOW: przelaczanie NET/USB jest zablokowane"))
-    ok, error_message = run_mode_script(NET_MODE_SCRIPT, "SIEĆ (UPLOAD)")
-    if not ok:
-        return redirect(url_for("index", msg=error_message))
-    return redirect(url_for("index", msg="Tryb SIEĆ aktywny"))
-
-@app.route("/usb", methods=["POST"])
-def usb():
-    if CNC_SHADOW_ENABLED:
-        return redirect(url_for("index", msg="Tryb SHADOW: przelaczanie NET/USB jest zablokowane"))
-    ok, error_message = run_mode_script(USB_MODE_SCRIPT, "USB (CNC)")
-    if not ok:
-        return redirect(url_for("index", msg=error_message))
-    return redirect(url_for("index", msg="Tryb USB aktywny"))
-
 @app.route("/api/status", methods=["GET"])
 def api_status():
-    if CNC_SHADOW_ENABLED:
-        shadow_state = read_shadow_state()
-        fsm_state = "UNKNOWN"
-        if shadow_state:
-            fsm_state = shadow_state.get("fsm_state", "UNKNOWN")
-        switching = fsm_state in {
-            "CHANGE_DETECTED",
-            "BUILD_SLOT_A",
-            "BUILD_SLOT_B",
-            "EXPORT_STOP",
-            "EXPORT_START",
-        }
-        return jsonify(
-            {
-                "mode": "SHADOW",
-                "shadow_enabled": True,
-                "shadow_state": shadow_state,
-                "switching": switching,
-                "ap_enabled": CNC_AP_ENABLED,
-            }
-        )
-
-    result = subprocess.run(
-        [STATUS_SCRIPT],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    stdout = result.stdout or ""
-    stderr = result.stderr or ""
-    mode = parse_status_mode(stdout)
-    mount_point = parse_status_mount_point(stdout)
-    if not mode:
-        app.logger.warning(
-            "Nie rozpoznano trybu z status.sh (rc=%s). stdout='%s' stderr='%s'",
-            result.returncode,
-            stdout.strip(),
-            stderr.strip(),
-        )
-        return jsonify({"mode": None, "error": "Brak trybu w status.sh"}), 500
-    usb_gadget = mode == "USB"
-    img_mounted = is_mount_active(mount_point)
-    samba_active = is_samba_active()
-    switching = None
-    if img_mounted is not None:
-        switching = usb_gadget and img_mounted
+    shadow_state = read_shadow_state()
+    fsm_state = "UNKNOWN"
+    if shadow_state:
+        fsm_state = shadow_state.get("fsm_state", "UNKNOWN")
+    switching = fsm_state in {
+        "CHANGE_DETECTED",
+        "BUILD_SLOT_A",
+        "BUILD_SLOT_B",
+        "EXPORT_STOP",
+        "EXPORT_START",
+    }
     return jsonify(
         {
-            "mode": mode,
-            "usb_gadget": usb_gadget,
-            "samba": samba_active,
-            "mount_point": mount_point,
-            "img_mounted": img_mounted,
+            "mode": "SHADOW",
+            "shadow_enabled": CNC_SHADOW_ENABLED,
+            "shadow_state": shadow_state,
             "switching": switching,
             "ap_enabled": CNC_AP_ENABLED,
         }
@@ -2906,46 +2672,6 @@ def api_shadow_manual_status():
 
 @app.route("/api/restart-gui", methods=["POST"])
 def api_restart_gui():
-    if not CNC_SHADOW_ENABLED:
-        try:
-            status_result = subprocess.run(
-                [STATUS_SCRIPT],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return jsonify({"error": "Timeout status.sh"}), 500
-        except OSError:
-            return jsonify({"error": "Nie można uruchomić status.sh"}), 500
-
-        stdout = status_result.stdout or ""
-        stderr = status_result.stderr or ""
-        if status_result.returncode != 0:
-            app.logger.warning(
-                "status.sh zakonczony bledem (rc=%s). stdout='%s' stderr='%s'",
-                status_result.returncode,
-                stdout.strip(),
-                stderr.strip(),
-            )
-            return jsonify({"error": "Błąd status.sh"}), 500
-
-        mode = parse_status_mode(stdout)
-        if not mode:
-            app.logger.warning(
-                "Nie rozpoznano trybu z status.sh. stdout='%s' stderr='%s'",
-                stdout.strip(),
-                stderr.strip(),
-            )
-            return jsonify({"error": "Brak trybu w status.sh"}), 500
-
-        if mode == "USB":
-            return jsonify({"error": "GUI restart disabled in USB mode"}), 409
-
-        if mode != "NET":
-            return jsonify({"error": "Nieznany tryb pracy"}), 500
-
     restart_result, restart_error = restart_systemd_unit(WEBUI_SYSTEMD_UNIT, timeout=10)
     if restart_error:
         return jsonify({"error": restart_error}), 500
@@ -3213,22 +2939,7 @@ def wifi_profile_delete():
 def upload():
     upload_dir = get_upload_directory()
     if not upload_dir:
-        if CNC_SHADOW_ENABLED:
-            return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
-        return redirect(url_for("index", msg="Brak konfiguracji CNC_UPLOAD_DIR"))
-
-    if not CNC_SHADOW_ENABLED:
-        if is_usb_mode():
-            return redirect(url_for("index", msg="Tryb USB: upload niedostępny"))
-
-        mount_active = is_mount_active(upload_dir)
-        if mount_active is not True:
-            log_webui_event(
-                f"Upload blocked: upload dir not mounted ({upload_dir}), mount_active={mount_active}"
-            )
-            return redirect(
-                url_for("index", msg="Upload niedostepny: obraz USB nie jest zamontowany")
-            )
+        return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
 
     if "file" not in request.files:
         return redirect(url_for("index", msg="Brak pliku w żądaniu"))
@@ -3255,22 +2966,7 @@ def upload():
 def delete_files():
     upload_dir = get_upload_directory()
     if not upload_dir:
-        if CNC_SHADOW_ENABLED:
-            return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
-        return redirect(url_for("index", msg="Brak konfiguracji CNC_UPLOAD_DIR"))
-
-    if not CNC_SHADOW_ENABLED:
-        if is_usb_mode():
-            return redirect(url_for("index", msg="Tryb USB: kasowanie niedostepne"))
-
-        mount_active = is_mount_active(upload_dir)
-        if mount_active is not True:
-            log_webui_event(
-                f"Delete blocked: upload dir not mounted ({upload_dir}), mount_active={mount_active}"
-            )
-            return redirect(
-                url_for("index", msg="Kasowanie niedostepne: obraz USB nie jest zamontowany")
-            )
+        return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
 
     if not os.path.isdir(upload_dir):
         return redirect(url_for("index", msg="Katalog plikow CNC jest niedostepny"))
