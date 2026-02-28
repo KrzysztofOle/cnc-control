@@ -617,7 +617,7 @@ body.ui-busy #loading-overlay * {
     <li>Brak plikow.</li>
   {% endfor %}
   </ul>
-  <button type="submit" id="delete-files-button" disabled>Usun zaznaczone</button>
+  <button type="submit" id="delete-files-button">Usun zaznaczone</button>
 </form>
 
 <hr>
@@ -987,7 +987,6 @@ body.ui-busy #loading-overlay * {
 
     function updateDeleteState() {
       const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
-      deleteButton.disabled = busy || selectedCount === 0;
       if (selectedCount > 0) {
         deleteButton.textContent = "Usun zaznaczone (" + selectedCount + ")";
       } else {
@@ -1933,6 +1932,7 @@ body.ui-busy #loading-overlay * {
             form.querySelectorAll('input[name="files"][type="checkbox"]:checked')
           );
           if (selected.length === 0) {
+            window.alert("Zaznacz co najmniej jeden plik do usuniecia.");
             return;
           }
           const preview = selected
