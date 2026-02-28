@@ -1029,7 +1029,7 @@ body.ui-busy #loading-overlay * {
     const message =
       "Czy na pewno usunac " +
       selected.length +
-      " plik(ow)?\n" +
+      " plik(ow)?\\n" +
       preview +
       suffix;
     const confirmed = window.confirm(message);
