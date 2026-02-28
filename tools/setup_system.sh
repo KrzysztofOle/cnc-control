@@ -491,7 +491,11 @@ else
     chmod 755 "${SAMBA_SHARE_PATH}"
 fi
 
-install -o root -g root -m 644 "${SYSTEMD_SERVICE_SRC}" "${SYSTEMD_SERVICE_DEST}"
+if [ -f "${SYSTEMD_SERVICE_DEST}" ]; then
+    echo "[INFO] Pozostawiam istniejacy ${SYSTEMD_SERVICE_DEST} (zarzadzany przez setup_webui.sh)"
+else
+    install -o root -g root -m 644 "${SYSTEMD_SERVICE_SRC}" "${SYSTEMD_SERVICE_DEST}"
+fi
 install -o root -g root -m 644 "${SYSTEMD_AP_SERVICE_SRC}" "${SYSTEMD_AP_SERVICE_DEST}"
 install -o root -g root -m 644 "${SYSTEMD_WIFI_FALLBACK_SRC}" "${SYSTEMD_WIFI_FALLBACK_DEST}"
 
