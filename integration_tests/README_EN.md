@@ -9,7 +9,7 @@ The runner covers:
 - SSH (remote diagnostics and commands),
 - WebUI (file upload/delete),
 - SMB (share write/delete),
-- USB (gadget mode validation),
+- USB (gadget mode validation + optional host-side read),
 - NET->USB sync checks and timing measurements.
 
 ## Always-testing-latest-code flow
@@ -45,7 +45,7 @@ If any step fails, preflight is marked as `failed` and functional phases are ski
 - `ssh`: diagnostics alias (also preflight only)
 - `net`: preflight + `phase_1_net_webui`
 - `smb`: preflight + `phase_2_smb`
-- `usb`: preflight + `phase_3_usb`
+- `usb`: preflight + `phase_3_usb` (with `--usb-host-mount`, also direct host USB read)
 - `sync`: preflight + `phase_4_sync_net_to_usb`
 - `perf`: preflight + `phase_5_performance`
 - `all`: preflight + all functional phases (`1..5`)
@@ -87,6 +87,8 @@ python3 integration_tests/test_runner.py \
 - `--remote-selftest-timeout 180` - timeout for `cnc_selftest`.
 - `--disable-selftest-auto-repair` - disable one-shot SHADOW LUN auto-repair.
 - `--switch-timeout 90` - timeout waiting for NET/USB mode switch.
+- `--usb-host-mount /Volumes/CNC_USB` - local mount path of gadget storage on DEV machine; enables direct host-side read in USB phase.
+- `--usb-host-read-timeout 25` - timeout waiting for probe file visibility on USB host mount.
 
 ## Report
 

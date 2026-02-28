@@ -47,6 +47,7 @@ MOUNT="${CNC_MOUNT_POINT}"
 
 ensure_usb_image() {
     local size_mb="${CNC_USB_IMG_SIZE_MB:-1024}"
+    local usb_label="${CNC_USB_LABEL:-CNC_USB}"
 
     if [ -e "${IMG}" ] && [ ! -f "${IMG}" ]; then
         echo "Sciezka CNC_USB_IMG nie wskazuje na zwykly plik: ${IMG}"
@@ -62,6 +63,16 @@ ensure_usb_image() {
         return 1
     fi
 
+    if [ -z "${usb_label}" ]; then
+        echo "Nieprawidlowa wartosc CNC_USB_LABEL: pusty label."
+        return 1
+    fi
+
+    if [ "${#usb_label}" -gt 11 ]; then
+        echo "Nieprawidlowa wartosc CNC_USB_LABEL: maksymalnie 11 znakow dla FAT."
+        return 1
+    fi
+
     if ! command -v mkfs.vfat >/dev/null 2>&1; then
         echo "Brak mkfs.vfat. Zainstaluj pakiet dosfstools."
         return 1
@@ -69,10 +80,10 @@ ensure_usb_image() {
 
     local image_dir
     image_dir="$(dirname "${IMG}")"
-    echo "Tworzenie obrazu USB (${size_mb}MB): ${IMG}"
+    echo "Tworzenie obrazu USB (${size_mb}MB, label=${usb_label}): ${IMG}"
     sudo mkdir -p "${image_dir}"
     sudo truncate -s "${size_mb}M" "${IMG}"
-    sudo mkfs.vfat -F 32 "${IMG}" >/dev/null
+    sudo mkfs.vfat -F 32 -n "${usb_label}" "${IMG}" >/dev/null
     sudo chmod 664 "${IMG}"
 }
 

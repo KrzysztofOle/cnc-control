@@ -350,6 +350,7 @@ configure_usb_otg_dwc2() {
 create_usb_image_if_missing() {
     local image_path="${CNC_USB_IMG:-}"
     local size_mb="${CNC_USB_IMG_SIZE_MB:-1024}"
+    local usb_label="${CNC_USB_LABEL:-CNC_USB}"
 
     if [ -z "${image_path}" ]; then
         echo "[WARN] Brak CNC_USB_IMG w ${ENV_DEST}. Pomijam tworzenie obrazu USB."
@@ -370,6 +371,16 @@ create_usb_image_if_missing() {
         exit 1
     fi
 
+    if [ -z "${usb_label}" ]; then
+        echo "Nieprawidlowa wartosc CNC_USB_LABEL: pusty label."
+        exit 1
+    fi
+
+    if [ "${#usb_label}" -gt 11 ]; then
+        echo "Nieprawidlowa wartosc CNC_USB_LABEL: maksymalnie 11 znakow dla FAT."
+        exit 1
+    fi
+
     if ! command -v mkfs.vfat >/dev/null 2>&1; then
         echo "Brak mkfs.vfat. Zainstaluj pakiet dosfstools."
         exit 1
@@ -377,9 +388,9 @@ create_usb_image_if_missing() {
 
     mkdir -p "$(dirname "${image_path}")"
     truncate -s "${size_mb}M" "${image_path}"
-    mkfs.vfat -F 32 "${image_path}" >/dev/null
+    mkfs.vfat -F 32 -n "${usb_label}" "${image_path}" >/dev/null
     chmod 664 "${image_path}"
-    echo "[INFO] Utworzono obraz USB: ${image_path} (${size_mb}MB)"
+    echo "[INFO] Utworzono obraz USB: ${image_path} (${size_mb}MB, label=${usb_label})"
 }
 
 if [ ! -f "${SYSTEMD_SERVICE_SRC}" ]; then

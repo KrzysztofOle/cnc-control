@@ -14,6 +14,7 @@ class RebuildConfig:
     master_dir: str
     slot_size_mb: int
     tmp_suffix: str
+    usb_label: str
 
 
 class RebuildEngine:
@@ -22,10 +23,17 @@ class RebuildEngine:
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "RebuildEngine":
+        usb_label = environment.get("CNC_USB_LABEL", "CNC_USB").strip()
+        if not usb_label:
+            raise RebuildError("Nieprawidlowa wartosc CNC_USB_LABEL: pusty label.")
+        if len(usb_label) > 11:
+            raise RebuildError("Nieprawidlowa wartosc CNC_USB_LABEL: maksymalnie 11 znakow dla FAT.")
+
         config = RebuildConfig(
             master_dir=environment.get("CNC_MASTER_DIR", "/var/lib/cnc-control/master"),
             slot_size_mb=int(environment.get("CNC_SHADOW_SLOT_SIZE_MB", "256")),
             tmp_suffix=environment.get("CNC_SHADOW_TMP_SUFFIX", ".tmp"),
+            usb_label=usb_label,
         )
         return cls(config=config)
 
@@ -42,7 +50,7 @@ class RebuildEngine:
                 "Nie udalo sie utworzyc obrazu tymczasowego.",
             )
             self._run_command(
-                [self._resolve_binary("mkfs.vfat"), "-F", "32", tmp_path],
+                [self._resolve_binary("mkfs.vfat"), "-F", "32", "-n", self._config.usb_label, tmp_path],
                 "Nie udalo sie sformatowac obrazu FAT.",
             )
             master_entries = self._list_master_entries()

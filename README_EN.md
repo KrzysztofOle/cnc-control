@@ -309,6 +309,7 @@ Optional variables:
 | `CNC_WEBUI_LOG_SINCE` | Time range for `journalctl` (e.g. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
 | `CNC_AP_BLOCK_FLAG` | Path to temporary AP block flag file | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
 | `CNC_AP_ENABLED` | Global AP switch (`true`/`false`) | `false` | `webui/app.py` |
+| `CNC_USB_LABEL` | FAT volume label visible on USB host (max 11 chars) | `CNC_USB` | `net_mode.sh`, `usb_mode.sh`, `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
 | `CNC_USB_MOUNT` | Legacy: USB mount point | none | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
 
 ---

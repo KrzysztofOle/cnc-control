@@ -75,6 +75,17 @@ def parse_env_text(content: str) -> dict[str, str]:
     return result
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def resolve_environment_target() -> tuple[str | None, str | None]:
     if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
         return None, (
@@ -1001,7 +1012,15 @@ class Runner:
         if not self.udc_name:
             raise SkipPhaseError("Brak UDC na RPi - faza USB pominięta.")
 
-        switched = self.switch_mode("USB")
+        usb_host_read: dict[str, Any] = {
+            "enabled": bool(self.args.usb_host_mount),
+            "reason": "usb_host_mount_not_set" if not self.args.usb_host_mount else "",
+        }
+        if self.args.usb_host_mount:
+            usb_host_read = self.run_usb_host_read_probe()
+            switched = usb_host_read["switch_to_usb"]
+        else:
+            switched = self.switch_mode("USB")
 
         mount_state = None
         listing_preview: list[str] = []
@@ -1040,6 +1059,75 @@ class Runner:
             "udc": self.udc_name,
             "mount_state": mount_state,
             "listing_preview": listing_preview,
+            "usb_host_read": usb_host_read,
+        }
+
+    def run_usb_host_read_probe(self) -> dict[str, Any]:
+        if not self.args.usb_host_mount:
+            raise RuntimeError("Brak --usb-host-mount dla testu odczytu host USB.")
+
+        host_mount = Path(self.args.usb_host_mount).expanduser()
+        if not host_mount.exists() or not host_mount.is_dir():
+            raise RuntimeError(
+                f"Nieprawidłowy --usb-host-mount: {host_mount} (wymagany istniejący katalog)."
+            )
+
+        self.switch_mode("NET")
+
+        file_name = f"{self.run_prefix}_usb_host_read_probe.nc"
+        local_file = self.create_local_file(
+            file_name,
+            [
+                "%",
+                "(USB host read probe)",
+                "G21",
+                "G90",
+                "G0 X5 Y5",
+                "M30",
+                "%",
+            ],
+        )
+        self.upload_file_via_webui(local_file)
+        expected_sha256 = sha256_file(local_file)
+
+        switch_to_usb = self.switch_mode("USB")
+
+        probe_path = host_mount / file_name
+        started = time.monotonic()
+        wait_deadline = started + self.args.usb_host_read_timeout
+        while time.monotonic() < wait_deadline:
+            if probe_path.is_file():
+                break
+            time.sleep(0.5)
+
+        if not probe_path.is_file():
+            preview_entries = sorted(
+                [entry.name for entry in host_mount.iterdir() if not entry.name.startswith(".")],
+                key=str.casefold,
+            )[:20]
+            raise RuntimeError(
+                "Plik probe nie jest widoczny po stronie hosta USB "
+                f"w czasie {self.args.usb_host_read_timeout}s: {probe_path}; "
+                f"entries_preview={preview_entries}"
+            )
+
+        observed_sha256 = sha256_file(probe_path)
+        if observed_sha256 != expected_sha256:
+            raise RuntimeError(
+                "Niezgodność SHA256 dla odczytu host USB: "
+                f"expected={expected_sha256}, observed={observed_sha256}, file={probe_path}"
+            )
+
+        wait_seconds = round(time.monotonic() - started, 6)
+        return {
+            "enabled": True,
+            "host_mount": str(host_mount),
+            "file": file_name,
+            "path": str(probe_path),
+            "expected_sha256": expected_sha256,
+            "observed_sha256": observed_sha256,
+            "wait_seconds": wait_seconds,
+            "switch_to_usb": switch_to_usb,
         }
 
     def phase_4_sync_net_to_usb(self) -> dict[str, Any]:
@@ -1583,7 +1671,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run staged integration checks against Raspberry Pi CNC Control "
-            "(preflight, NET/WebUI, SMB, USB, sync, performance)."
+            "(preflight, NET/WebUI, SMB, USB, USB host-read, sync, performance)."
         )
     )
     parser.add_argument(
@@ -1695,6 +1783,21 @@ def parse_args() -> argparse.Namespace:
         default=15.0,
         help="SMB timeout in seconds.",
     )
+    # PL: Parametry lokalnego odczytu host-side z emulowanej pamięci USB.
+    # EN: Parameters for local host-side read checks from emulated USB storage.
+    parser.add_argument(
+        "--usb-host-mount",
+        help=(
+            "Local mount path of USB gadget storage on DEV machine "
+            "(e.g. /Volumes/CNC_USB). Enables direct host read in phase_3_usb."
+        ),
+    )
+    parser.add_argument(
+        "--usb-host-read-timeout",
+        type=float,
+        default=25.0,
+        help="Timeout in seconds waiting for probe file visibility on USB host mount.",
+    )
 
     return parser.parse_args()
 
@@ -1704,6 +1807,14 @@ def validate_args(args: argparse.Namespace) -> list[str]:
 
     if args.mode in {"all", "smb"} and not args.smb_share:
         errors.append("Missing --smb-share for mode 'all' or 'smb'.")
+    if args.usb_host_read_timeout <= 0:
+        errors.append("--usb-host-read-timeout must be > 0.")
+    if args.usb_host_mount:
+        mount_path = Path(args.usb_host_mount).expanduser()
+        if not mount_path.exists():
+            errors.append(f"USB host mount path does not exist: {mount_path}")
+        elif not mount_path.is_dir():
+            errors.append(f"USB host mount path is not a directory: {mount_path}")
 
     return errors
 
@@ -1740,6 +1851,7 @@ def main() -> int:
             "ssh_user": args.ssh_user,
             "webui_url": runner.webui_url,
             "smb_share": args.smb_share,
+            "usb_host_mount": args.usb_host_mount,
         },
         platform={
             "system": platform.system(),

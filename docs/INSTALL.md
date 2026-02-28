@@ -81,6 +81,7 @@ Skrypt `tools/setup_system.sh` kopiuje tam domyślny plik `config/cnc-control.en
 ## Zmienne środowiskowe
 
 - `CNC_USB_IMG` – ścieżka do obrazu USB Mass Storage.
+- `CNC_USB_LABEL` – etykieta FAT widoczna na hoście USB (maks. 11 znaków).
 - `CNC_MOUNT_POINT` – punkt montowania obrazu (upload G-code).
 - `CNC_UPLOAD_DIR` – katalog, do którego WebUI zapisuje pliki.
 

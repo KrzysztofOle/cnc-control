@@ -304,6 +304,7 @@ Pozostale zmienne (opcjonalne):
 | `CNC_WEBUI_LOG_SINCE` | Zakres czasu dla `journalctl` (np. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
 | `CNC_AP_BLOCK_FLAG` | Sciezka pliku tymczasowej blokady AP | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
 | `CNC_AP_ENABLED` | Globalny przelacznik AP (`true`/`false`) | `false` | `webui/app.py` |
+| `CNC_USB_LABEL` | Etykieta woluminu FAT widoczna na hoście USB (max 11 znakow) | `CNC_USB` | `net_mode.sh`, `usb_mode.sh`, `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
 | `CNC_USB_MOUNT` | Legacy: punkt montowania USB | brak | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
 
 ---

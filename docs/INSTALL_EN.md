@@ -81,6 +81,7 @@ The `tools/setup_system.sh` script copies the default `config/cnc-control.env.ex
 ## Environment variables
 
 - `CNC_USB_IMG` – path to the USB Mass Storage image.
+- `CNC_USB_LABEL` – FAT label visible on the USB host (max 11 characters).
 - `CNC_MOUNT_POINT` – image mount point (G-code upload).
 - `CNC_UPLOAD_DIR` – directory where WebUI writes uploaded files.
 

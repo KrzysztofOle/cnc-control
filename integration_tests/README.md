@@ -9,7 +9,7 @@ Runner pokrywa:
 - SSH (diagnostyka i komendy zdalne),
 - WebUI (upload/usuwanie plików),
 - SMB (zapis/usuwanie przez udział),
-- USB (walidacja trybu gadget),
+- USB (walidacja trybu gadget + opcjonalny odczyt host-side),
 - NET->USB sync oraz pomiary czasowe.
 
 ## Zasada uruchamiania na najnowszym kodzie
@@ -47,7 +47,7 @@ Jeśli którykolwiek krok powyżej zakończy się błędem, preflight kończy si
 - `ssh`: alias diagnostyczny (także tylko preflight)
 - `net`: preflight + `phase_1_net_webui`
 - `smb`: preflight + `phase_2_smb`
-- `usb`: preflight + `phase_3_usb`
+- `usb`: preflight + `phase_3_usb` (z `--usb-host-mount` także bezpośredni odczyt pliku z hosta USB)
 - `sync`: preflight + `phase_4_sync_net_to_usb`
 - `perf`: preflight + `phase_5_performance`
 - `all`: preflight + wszystkie fazy funkcjonalne (`1..5`)
@@ -89,6 +89,8 @@ python3 integration_tests/test_runner.py \
 - `--remote-selftest-timeout 180` - timeout dla `cnc_selftest`.
 - `--disable-selftest-auto-repair` - wyłącza jednorazową auto-naprawę SHADOW LUN.
 - `--switch-timeout 90` - timeout oczekiwania na przełączenie NET/USB.
+- `--usb-host-mount /Volumes/CNC_USB` - lokalna ścieżka montowania pamięci gadget na maszynie DEV; włącza bezpośredni test odczytu host-side w fazie USB.
+- `--usb-host-read-timeout 25` - timeout oczekiwania na widoczność pliku testowego po stronie hosta USB.
 
 ## Raport
 

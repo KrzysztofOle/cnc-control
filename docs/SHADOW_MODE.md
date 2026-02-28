@@ -684,6 +684,7 @@ Rollback z A/B do single-slot:
 | `CNC_ACTIVE_SLOT_FILE` | path | plik stanu aktywnego slotu | `/var/lib/cnc-control/shadow_active_slot.state` | tak |
 | `CNC_SHADOW_STATE_FILE` | path | plik stanu FSM | `/var/lib/cnc-control/shadow_state.json` | tak |
 | `CNC_SHADOW_SLOT_SIZE_MB` | int | `128..2048` | `256` | tak |
+| `CNC_USB_LABEL` | string | etykieta FAT, max 11 znaków | `CNC_USB` | tak |
 | `CNC_SHADOW_INCREMENTAL` | bool | `true` / `false` | `false` | tak |
 | `CNC_SHADOW_REBUILD_STRATEGY` | enum | `auto`, `manual`, `auto_debounce` | `auto_debounce` (FULL) | tak |
 | `CNC_SHADOW_LOCK_FILE` | path | plik lock | `/var/run/cnc-shadow.lock` | tak |
