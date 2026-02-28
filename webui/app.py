@@ -336,6 +336,22 @@ button:disabled {
   cursor: not-allowed;
 }
 
+#cnc-files-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 8px 0;
+}
+
+#cnc-files-list li {
+  margin: 4px 0;
+}
+
+.cnc-file-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 #zerotier-panel {
   display: flex;
   flex-direction: column;
@@ -588,11 +604,21 @@ body.ui-busy #loading-overlay * {
 <hr>
 
 <h3>Pliki CNC</h3>
-<ul>
-{% for f in files %}
-  <li>{{ f }}</li>
-{% endfor %}
-</ul>
+<form id="delete-files-form" action="/delete-files" method="post">
+  <ul id="cnc-files-list">
+  {% for f in files %}
+    <li>
+      <label class="cnc-file-entry">
+        <input type="checkbox" name="files" value="{{ f }}" class="cnc-file-checkbox">
+        <span>{{ f }}</span>
+      </label>
+    </li>
+  {% else %}
+    <li>Brak plikow.</li>
+  {% endfor %}
+  </ul>
+  <button type="submit" id="delete-files-button" disabled>Usun zaznaczone</button>
+</form>
 
 <hr>
 
@@ -944,6 +970,35 @@ body.ui-busy #loading-overlay * {
       body: new FormData(form),
       credentials: "same-origin",
     });
+  }
+
+  function initFileDeleteControls() {
+    const deleteForm = document.getElementById("delete-files-form");
+    if (!deleteForm) {
+      return;
+    }
+    const deleteButton = document.getElementById("delete-files-button");
+    if (!deleteButton) {
+      return;
+    }
+    const checkboxes = Array.from(
+      deleteForm.querySelectorAll('input[name="files"][type="checkbox"]')
+    );
+
+    function updateDeleteState() {
+      const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+      deleteButton.disabled = busy || selectedCount === 0;
+      if (selectedCount > 0) {
+        deleteButton.textContent = "Usun zaznaczone (" + selectedCount + ")";
+      } else {
+        deleteButton.textContent = "Usun zaznaczone";
+      }
+    }
+
+    checkboxes.forEach((checkbox) => {
+      checkbox.addEventListener("change", updateDeleteState);
+    });
+    updateDeleteState();
   }
 
   const MODE_LABELS = {
@@ -1873,6 +1928,28 @@ body.ui-busy #loading-overlay * {
         if (busy) {
           return;
         }
+        if (form.id === "delete-files-form") {
+          const selected = Array.from(
+            form.querySelectorAll('input[name="files"][type="checkbox"]:checked')
+          );
+          if (selected.length === 0) {
+            return;
+          }
+          const preview = selected
+            .slice(0, 5)
+            .map((input) => input.value)
+            .join(", ");
+          const suffix = selected.length > 5 ? ", ..." : "";
+          const message =
+            "Czy na pewno usunac " +
+            selected.length +
+            " plik(ow)?\n" +
+            preview +
+            suffix;
+          if (!window.confirm(message)) {
+            return;
+          }
+        }
         const request = buildRequest(form);
         runAction(request);
       });
@@ -1893,6 +1970,7 @@ body.ui-busy #loading-overlay * {
     initShadowControls();
     initWifiControls();
     initZeroTierControls();
+    initFileDeleteControls();
   });
 </script>
 
@@ -1906,6 +1984,29 @@ def is_usb_mode():
 
 def is_hidden_file(name):
     return name.startswith(".") or name in HIDDEN_NAMES
+
+
+def resolve_upload_file_path(upload_dir, raw_name):
+    if not isinstance(raw_name, str):
+        return None, None
+    name = raw_name
+    if not name:
+        return None, None
+    if name in {".", ".."}:
+        return None, None
+    if os.path.basename(name) != name:
+        return None, None
+    if is_hidden_file(name):
+        return None, None
+    upload_abs = os.path.abspath(upload_dir)
+    target_abs = os.path.abspath(os.path.join(upload_abs, name))
+    try:
+        common = os.path.commonpath([upload_abs, target_abs])
+    except ValueError:
+        return None, None
+    if common != upload_abs:
+        return None, None
+    return target_abs, name
 
 
 def log_webui_event(message):
@@ -2494,7 +2595,10 @@ def index():
         else:
             message = "Brak konfiguracji CNC_UPLOAD_DIR"
     if upload_dir and os.path.isdir(upload_dir):
-        files = [name for name in os.listdir(upload_dir) if not is_hidden_file(name)]
+        files = sorted(
+            [name for name in os.listdir(upload_dir) if not is_hidden_file(name)],
+            key=str.casefold,
+        )
     if CNC_SHADOW_ENABLED and shadow_state and shadow_state.get("fsm_state") == "ERROR":
         if not message and isinstance(shadow_state.get("last_error"), dict):
             error_code = shadow_state["last_error"].get("code", "ERR")
@@ -3017,6 +3121,74 @@ def upload():
         return redirect(url_for("index", msg="Błąd zapisu pliku"))
 
     return redirect(url_for("index", msg="Upload OK"))
+
+
+@app.route("/delete-files", methods=["POST"])
+def delete_files():
+    upload_dir = get_upload_directory()
+    if not upload_dir:
+        if CNC_SHADOW_ENABLED:
+            return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
+        return redirect(url_for("index", msg="Brak konfiguracji CNC_UPLOAD_DIR"))
+
+    if not CNC_SHADOW_ENABLED:
+        if is_usb_mode():
+            return redirect(url_for("index", msg="Tryb USB: kasowanie niedostepne"))
+
+        mount_active = is_mount_active(upload_dir)
+        if mount_active is not True:
+            log_webui_event(
+                f"Delete blocked: upload dir not mounted ({upload_dir}), mount_active={mount_active}"
+            )
+            return redirect(
+                url_for("index", msg="Kasowanie niedostepne: obraz USB nie jest zamontowany")
+            )
+
+    if not os.path.isdir(upload_dir):
+        return redirect(url_for("index", msg="Katalog plikow CNC jest niedostepny"))
+
+    requested_files = request.form.getlist("files")
+    unique_files = []
+    seen = set()
+    for raw_name in requested_files:
+        if raw_name in seen:
+            continue
+        seen.add(raw_name)
+        unique_files.append(raw_name)
+
+    if not unique_files:
+        return redirect(url_for("index", msg="Nie wybrano plikow do usuniecia"))
+
+    deleted_count = 0
+    failed_count = 0
+
+    for raw_name in unique_files:
+        target_path, clean_name = resolve_upload_file_path(upload_dir, raw_name)
+        if not target_path or not clean_name:
+            failed_count += 1
+            continue
+        if not os.path.exists(target_path):
+            failed_count += 1
+            continue
+        if not os.path.isfile(target_path):
+            failed_count += 1
+            continue
+        try:
+            os.remove(target_path)
+            deleted_count += 1
+        except OSError:
+            failed_count += 1
+
+    if deleted_count == 0:
+        return redirect(url_for("index", msg="Nie udalo sie usunac wybranych plikow"))
+    if failed_count > 0:
+        return redirect(
+            url_for(
+                "index",
+                msg=f"Usunieto plikow: {deleted_count}. Bledy podczas kasowania: {failed_count}.",
+            )
+        )
+    return redirect(url_for("index", msg=f"Usunieto plikow: {deleted_count}."))
 
 @app.route("/restart", methods=["POST"])
 def restart():
