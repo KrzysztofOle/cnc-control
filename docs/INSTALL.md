@@ -39,10 +39,7 @@ instaluje zależności i konfiguruje usługi systemd.
 ```bash
 git clone https://github.com/<twoj-user>/cnc-control.git /home/andrzej/cnc-control
 cd /home/andrzej/cnc-control
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install --upgrade ".[rpi]" || pip install --upgrade .
+python3 tools/bootstrap_env.py --target rpi
 sudo ./tools/setup_system.sh
 ```
 
@@ -50,6 +47,26 @@ Zaleznosci aplikacji sa zarzadzane przez `pyproject.toml`.
 Uslugi `cnc-webui.service` oraz `cnc-led.service` preferuja interpreter
 `/home/andrzej/cnc-control/.venv/bin/python3` (fallback do systemowego `python3`
 przez skrypty `setup_webui.sh` i `setup_led_service.sh`, gdy venv nie istnieje).
+
+## Profile srodowiska (DEV/RPI)
+
+Docelowo obowiazuje jeden punkt wejscia do tworzenia `.venv`:
+
+```bash
+python3 tools/bootstrap_env.py --target <dev|integration|rpi>
+```
+
+- `--target rpi`:
+  - instalacja zaleznosci z `pyproject.toml` (`--editable ".[rpi]"`),
+  - do uruchamiania na Raspberry Pi.
+- `--target dev`:
+  - instalacja zaleznosci developerskich z `requirements_dev.txt`.
+- `--target integration`:
+  - instalacja zaleznosci do testow zewnetrznych z `requirements_integration.txt`
+    (m.in. `paramiko`, `pysmb`).
+
+Skrypt zapisuje marker targetu w `.venv/.cnc_target`, aby ograniczyc pomylki
+przy uruchamianiu narzedzi w niewlasciwym srodowisku.
 
 ## Konfiguracja
 

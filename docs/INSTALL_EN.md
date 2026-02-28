@@ -39,10 +39,7 @@ installs dependencies, and configures systemd services.
 ```bash
 git clone https://github.com/<your-user>/cnc-control.git /home/andrzej/cnc-control
 cd /home/andrzej/cnc-control
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install --upgrade ".[rpi]" || pip install --upgrade .
+python3 tools/bootstrap_env.py --target rpi
 sudo ./tools/setup_system.sh
 ```
 
@@ -50,6 +47,26 @@ Application dependencies are managed via `pyproject.toml`.
 `cnc-webui.service` and `cnc-led.service` prefer the interpreter at
 `/home/andrzej/cnc-control/.venv/bin/python3` (with fallback to system `python3`
 via `setup_webui.sh` and `setup_led_service.sh` when the venv is missing).
+
+## Environment profiles (DEV/RPI)
+
+Use a single entrypoint to create `.venv`:
+
+```bash
+python3 tools/bootstrap_env.py --target <dev|integration|rpi>
+```
+
+- `--target rpi`:
+  - installs dependencies from `pyproject.toml` (`--editable ".[rpi]"`),
+  - intended for Raspberry Pi runtime.
+- `--target dev`:
+  - installs developer dependencies from `requirements_dev.txt`.
+- `--target integration`:
+  - installs external integration test dependencies from
+    `requirements_integration.txt` (including `paramiko`, `pysmb`).
+
+The script writes a target marker to `.venv/.cnc_target` to reduce
+environment-mismatch mistakes during test/tool execution.
 
 ## Configuration
 

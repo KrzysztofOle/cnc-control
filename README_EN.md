@@ -66,10 +66,19 @@ Optional:
 git clone https://github.com/<your-user>/cnc-control.git
 cd cnc-control
 
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install --editable ".[rpi]"
+python3 tools/bootstrap_env.py --target rpi
+```
+
+For a developer machine:
+
+```bash
+python3 tools/bootstrap_env.py --target dev
+```
+
+For integration tests (SSH/SMB):
+
+```bash
+python3 tools/bootstrap_env.py --target integration
 ```
 
 ---
