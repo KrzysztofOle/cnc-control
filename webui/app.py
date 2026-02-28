@@ -604,7 +604,7 @@ body.ui-busy #loading-overlay * {
 <hr>
 
 <h3>Pliki CNC</h3>
-<form id="delete-files-form" action="/delete-files" method="post">
+<form id="delete-files-form" action="/delete-files" method="post" onsubmit="return handleDeleteSubmit(this);">
   <input type="hidden" name="confirm_delete" id="confirm-delete-input" value="no">
   <ul id="cnc-files-list">
   {% for f in files %}
@@ -982,7 +982,6 @@ body.ui-busy #loading-overlay * {
     if (!deleteButton) {
       return;
     }
-    const confirmInput = document.getElementById("confirm-delete-input");
     const checkboxes = Array.from(
       deleteForm.querySelectorAll('input[name="files"][type="checkbox"]')
     );
@@ -1000,46 +999,44 @@ body.ui-busy #loading-overlay * {
       checkbox.addEventListener("change", updateDeleteState);
     });
 
-    deleteForm.addEventListener("submit", (event) => {
-      event.preventDefault();
-      if (busy) {
-        return;
-      }
-      const selected = checkboxes.filter((checkbox) => checkbox.checked);
-      if (selected.length === 0) {
-        window.alert("Zaznacz co najmniej jeden plik do usuniecia.");
-        if (confirmInput) {
-          confirmInput.value = "no";
-        }
-        return;
-      }
-
-      const preview = selected
-        .slice(0, 5)
-        .map((checkbox) => checkbox.value)
-        .join(", ");
-      const suffix = selected.length > 5 ? ", ..." : "";
-      const message =
-        "Czy na pewno usunac " +
-        selected.length +
-        " plik(ow)?\n" +
-        preview +
-        suffix;
-      if (!window.confirm(message)) {
-        if (confirmInput) {
-          confirmInput.value = "no";
-        }
-        return;
-      }
-
-      if (confirmInput) {
-        confirmInput.value = "yes";
-      }
-      const request = buildRequest(deleteForm);
-      runAction(request);
-    });
-
     updateDeleteState();
+  }
+
+  function handleDeleteSubmit(form) {
+    if (!form) {
+      return false;
+    }
+    if (busy) {
+      return false;
+    }
+    const confirmInput = form.querySelector("#confirm-delete-input");
+    const selected = Array.from(
+      form.querySelectorAll('input[name="files"][type="checkbox"]:checked')
+    );
+    if (selected.length === 0) {
+      window.alert("Zaznacz co najmniej jeden plik do usuniecia.");
+      if (confirmInput) {
+        confirmInput.value = "no";
+      }
+      return false;
+    }
+
+    const preview = selected
+      .slice(0, 5)
+      .map((checkbox) => checkbox.value)
+      .join(", ");
+    const suffix = selected.length > 5 ? ", ..." : "";
+    const message =
+      "Czy na pewno usunac " +
+      selected.length +
+      " plik(ow)?\n" +
+      preview +
+      suffix;
+    const confirmed = window.confirm(message);
+    if (confirmInput) {
+      confirmInput.value = confirmed ? "yes" : "no";
+    }
+    return confirmed;
   }
 
   const MODE_LABELS = {
