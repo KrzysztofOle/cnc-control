@@ -1,3 +1,4 @@
 -r requirements_dev.txt
+requests>=2.32,<3
 paramiko>=4,<5
 pysmb>=1.2.13,<2

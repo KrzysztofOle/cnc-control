@@ -1,0 +1,117 @@
+{
+  "timestamp_utc": "2026-02-28T17:34:58.779754+00:00",
+  "selected_mode": "all",
+  "target": {
+    "host": "192.168.7.139",
+    "ssh_user": "cnc",
+    "webui_url": "http://192.168.7.139:8080",
+    "smb_share": "cnc_usb"
+  },
+  "platform": {
+    "system": "Darwin",
+    "release": "25.2.0",
+    "python_version": "3.12.2"
+  },
+  "summary": {
+    "total": 7,
+    "passed": 3,
+    "failed": 0,
+    "skipped": 4
+  },
+  "measurements": {},
+  "results": [
+    {
+      "name": "phase_0_preflight",
+      "status": "passed",
+      "duration_seconds": 1.758107,
+      "details": {
+        "ssh": {
+          "host": "192.168.7.139",
+          "user": "cnc",
+          "stdout": "preflight_ssh_ok"
+        },
+        "env": {
+          "repo": "/home/cnc/cnc-control",
+          "upload_dir": "/mnt/cnc_usb",
+          "mount_point": "/mnt/cnc_usb",
+          "shadow_enabled": "true"
+        },
+        "status_sh": {
+          "mode": "USB",
+          "mount_point": "/mnt/cnc_usb"
+        },
+        "udc": {
+          "present": true,
+          "name": "3f980000.usb"
+        },
+        "webui": {
+          "url": "http://192.168.7.139:8080",
+          "api_status_mode": "SHADOW",
+          "switching": false
+        },
+        "shadow_enabled": true
+      },
+      "error": null
+    },
+    {
+      "name": "phase_1_net_webui",
+      "status": "skipped",
+      "duration_seconds": 5e-06,
+      "details": {},
+      "error": "Tryb SHADOW aktywny - faza NET/WebUI pominięta."
+    },
+    {
+      "name": "phase_2_smb",
+      "status": "passed",
+      "duration_seconds": 0.967823,
+      "details": {
+        "client": "pysmb_with_macos_smbfs_fallback",
+        "pysmb_error": "Server does not support any of the pysmb dialects. Please email pysmb to add in support for your OS\n==================== SMB Message ====================\nCommand: 0x72 (SMB_COM_NEGOTIATE) \nStatus: NTSTATUS=0x00000000 \nFlags: 0x88 \nFlags2: 0xC003 \nPID: 46796 \nUID: 0 \nMID: 1 \nTID: 0 \nSecurity: 0x0000000000000000 \nParameters: 2 bytes \nb'ffff' \nData: 0 bytes \nb'' \n==================== SMB Data Packet (hex) ====================\nb'ff534d4272000000008803c00000000000000000000000000000ccb60000010001ffff0000'\n",
+        "fallback": {
+          "client": "macos_smbfs",
+          "mount_point": "/Volumes/cnc_usb",
+          "used_existing_mount": true,
+          "file": "it_20260228173456_cnc-control_smb_probe.nc",
+          "entries_preview": [
+            "it_20260228173456_cnc-control_smb_probe.nc"
+          ]
+        }
+      },
+      "error": null
+    },
+    {
+      "name": "phase_3_usb",
+      "status": "skipped",
+      "duration_seconds": 2.8e-05,
+      "details": {},
+      "error": "Tryb SHADOW aktywny - faza USB pominięta."
+    },
+    {
+      "name": "phase_4_sync_net_to_usb",
+      "status": "skipped",
+      "duration_seconds": 9e-06,
+      "details": {},
+      "error": "Tryb SHADOW aktywny - faza sync NET→USB pominięta."
+    },
+    {
+      "name": "phase_5_performance",
+      "status": "skipped",
+      "duration_seconds": 9e-06,
+      "details": {},
+      "error": "Tryb SHADOW aktywny - faza performance pominięta."
+    },
+    {
+      "name": "phase_6_cleanup",
+      "status": "passed",
+      "duration_seconds": 2.8e-05,
+      "details": {
+        "leftover_webui_files_before": [],
+        "leftover_smb_files_before": [],
+        "shadow_enabled": true,
+        "leftover_webui_files_after": [],
+        "leftover_smb_files_after": []
+      },
+      "error": null
+    }
+  ]
+}
