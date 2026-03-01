@@ -18,6 +18,7 @@ import time
 import types
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urljoin, urlparse
@@ -177,6 +178,33 @@ class SkipPhaseError(RuntimeError):
     """Raised when a phase should be explicitly skipped."""
 
 
+class WebUiDirectoryParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.file_values: list[str] = []
+        self.dir_values: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {key: (value or "") for key, value in attrs}
+        if tag == "input":
+            if attr_map.get("name") == "files" and attr_map.get("type") == "checkbox":
+                value = attr_map.get("value", "").strip()
+                if value:
+                    self.file_values.append(value)
+            return
+
+        if tag != "a":
+            return
+        classes = set(filter(None, attr_map.get("class", "").split()))
+        if "cnc-file-link-dir" not in classes:
+            return
+        href = attr_map.get("href", "")
+        query = parse_qs(urlparse(href).query)
+        value = (query.get("dir") or [""])[0].strip()
+        if value:
+            self.dir_values.append(value)
+
+
 class Runner:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -197,6 +225,7 @@ class Runner:
         self.run_prefix = f"it_{run_stamp}_{Path.cwd().name}"
         self.local_temp_dir = Path(tempfile.mkdtemp(prefix="cnc_it_"))
         self.created_files: set[str] = set()
+        self.created_dirs: set[str] = set()
         self.smb_created_files: set[str] = set()
 
     def log_console(self, message: str) -> None:
@@ -826,11 +855,132 @@ class Runner:
         if leftovers:
             raise RuntimeError(f"Pliki nie zostaly usunięte: {', '.join(leftovers)}")
 
+        subdirectory_probe = self.run_webui_subdirectory_probe(label="net")
+
         return {
             "switch": switched,
             "uploaded_single": uploaded_single,
             "uploaded_batch": uploaded_batch,
             "delete": delete_response,
+            "subdirectory_probe": subdirectory_probe,
+        }
+
+    def run_webui_subdirectory_probe(self, *, label: str) -> dict[str, Any]:
+        subdir = f"{self.run_prefix}_{label}_dir"
+        nested_dir = f"{subdir}/nested"
+        self.create_remote_directory(subdir)
+        self.create_remote_directory(nested_dir)
+
+        root_listing_before = self.fetch_webui_directory_listing()
+        if subdir not in root_listing_before["dirs"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje podfolderu w katalogu glownym: "
+                f"{subdir}; dirs={root_listing_before['dirs']}"
+            )
+
+        root_file_name = f"{self.run_prefix}_{label}_subdir_root.nc"
+        root_file = self.create_local_file(
+            root_file_name,
+            [
+                "%",
+                "(subdir root file)",
+                "G90",
+                "G0 X2 Y2",
+                "M30",
+                "%",
+            ],
+        )
+        nested_file_name = f"{self.run_prefix}_{label}_subdir_nested.nc"
+        nested_file = self.create_local_file(
+            nested_file_name,
+            [
+                "%",
+                "(subdir nested file)",
+                "G90",
+                "G0 X4 Y4",
+                "M30",
+                "%",
+            ],
+        )
+
+        upload_root = self.upload_file_via_webui(root_file, remote_dir=subdir)
+        upload_nested = self.upload_file_via_webui(nested_file, remote_dir=nested_dir)
+
+        subdir_listing = self.fetch_webui_directory_listing(subdir)
+        expected_root_rel = self.join_relative_path(subdir, root_file_name)
+        if expected_root_rel not in subdir_listing["files"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje pliku w podfolderze: "
+                f"{expected_root_rel}; files={subdir_listing['files']}"
+            )
+        if nested_dir not in subdir_listing["dirs"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje zagniezdzonego podfolderu: "
+                f"{nested_dir}; dirs={subdir_listing['dirs']}"
+            )
+
+        nested_listing = self.fetch_webui_directory_listing(nested_dir)
+        expected_nested_rel = self.join_relative_path(nested_dir, nested_file_name)
+        if expected_nested_rel not in nested_listing["files"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje pliku w zagniezdzonym podfolderze: "
+                f"{expected_nested_rel}; files={nested_listing['files']}"
+            )
+
+        remote_subdir_files = set(self.remote_list_files(self.resolve_remote_directory(subdir)))
+        remote_nested_files = set(self.remote_list_files(self.resolve_remote_directory(nested_dir)))
+        if root_file_name not in remote_subdir_files:
+            raise RuntimeError(
+                "Plik nie istnieje na RPi w podfolderze: "
+                f"{root_file_name}; files={sorted(remote_subdir_files)}"
+            )
+        if nested_file_name not in remote_nested_files:
+            raise RuntimeError(
+                "Plik nie istnieje na RPi w zagniezdzonym podfolderze: "
+                f"{nested_file_name}; files={sorted(remote_nested_files)}"
+            )
+
+        delete_nested = self.delete_files_via_webui([expected_nested_rel], remote_dir=nested_dir)
+        delete_root = self.delete_files_via_webui([expected_root_rel], remote_dir=subdir)
+        delete_subdir_attempt = self.delete_files_via_webui(
+            [subdir],
+            remote_dir="",
+            require_success=False,
+        )
+
+        if delete_subdir_attempt["success"]:
+            raise RuntimeError("WebUI nie powinno usuwac katalogu przez /delete-files.")
+        removed_nested = self.remove_remote_directory(nested_dir)
+        removed_subdir = self.remove_remote_directory(subdir)
+        if self.remote_path_exists(subdir) or self.remote_path_exists(nested_dir):
+            raise RuntimeError(
+                "Nie udalo sie usunac katalogow testowych: "
+                f"subdir={subdir} removed={removed_subdir}, "
+                f"nested={nested_dir} removed={removed_nested}"
+            )
+
+        root_listing_after = self.fetch_webui_directory_listing()
+        if subdir in root_listing_after["dirs"]:
+            raise RuntimeError(f"Podfolder testowy nadal widoczny po cleanup: {subdir}")
+
+        return {
+            "subdir": subdir,
+            "nested_dir": nested_dir,
+            "uploads": {
+                "subdir_file": upload_root,
+                "nested_file": upload_nested,
+            },
+            "listings": {
+                "root_before": root_listing_before,
+                "subdir": subdir_listing,
+                "nested": nested_listing,
+                "root_after": root_listing_after,
+            },
+            "deletes": {
+                "nested_file": delete_nested,
+                "subdir_file": delete_root,
+                "subdir_attempt": delete_subdir_attempt,
+            },
         }
 
     def phase_2_smb(self) -> dict[str, Any]:
@@ -1308,6 +1458,44 @@ class Runner:
             self.upload_file_via_webui(local_file)
             file_names.append(file_name)
 
+        subdir = f"{self.run_prefix}_shadow_sync_dir"
+        nested_dir = f"{subdir}/nested"
+        self.create_remote_directory(subdir)
+        self.create_remote_directory(nested_dir)
+
+        subdir_file_name = f"{self.run_prefix}_shadow_sync_subdir.nc"
+        subdir_local_file = self.create_local_file(
+            subdir_file_name,
+            [
+                "%",
+                "(SHADOW sync subdir probe)",
+                "G21",
+                "G90",
+                "G1 X11 Y7 F900",
+                "M30",
+                "%",
+            ],
+        )
+        nested_file_name = f"{self.run_prefix}_shadow_sync_nested.nc"
+        nested_local_file = self.create_local_file(
+            nested_file_name,
+            [
+                "%",
+                "(SHADOW sync nested probe)",
+                "G21",
+                "G90",
+                "G1 X13 Y9 F900",
+                "M30",
+                "%",
+            ],
+        )
+        upload_subdir = self.upload_file_via_webui(subdir_local_file, remote_dir=subdir)
+        upload_nested = self.upload_file_via_webui(nested_local_file, remote_dir=nested_dir)
+
+        subdir_relative = self.join_relative_path(subdir, subdir_file_name)
+        nested_relative = self.join_relative_path(nested_dir, nested_file_name)
+        file_names.extend([subdir_relative, nested_relative])
+
         wait_result = self.wait_for_shadow_rebuild(
             previous_run_id=before_snapshot["run_id"],
             expected_trigger="watch",
@@ -1351,10 +1539,15 @@ class Runner:
 
         return {
             "files": file_names,
+            "directories": [subdir, nested_dir],
             "before": before_snapshot,
             "after": wait_result["snapshot"],
             "history_entry": wait_result["history_entry"],
             "runtime_mapping": runtime_mapping,
+            "uploads_nested": {
+                "subdir": upload_subdir,
+                "nested": upload_nested,
+            },
             "checksums_master": master_checksums,
             "checksums_active_slot": image_checksums,
             "duration_seconds": duration,
@@ -1435,6 +1628,7 @@ class Runner:
         errors: list[str] = []
         details: dict[str, Any] = {
             "leftover_webui_files_before": sorted(self.created_files),
+            "leftover_webui_dirs_before": sorted(self.created_dirs),
             "leftover_smb_files_before": sorted(self.smb_created_files),
             "shadow_enabled": self.shadow_enabled,
         }
@@ -1446,9 +1640,16 @@ class Runner:
                 errors.append(f"switch_net: {exc}")
 
         if self.preflight_ok and self.created_files:
-            names = sorted(self.created_files)
             try:
-                self.delete_files_via_webui(names)
+                grouped: dict[str, list[str]] = {}
+                for relative_path in sorted(self.created_files):
+                    relative_obj = PurePosixPath(relative_path)
+                    parent = str(relative_obj.parent)
+                    if parent == ".":
+                        parent = ""
+                    grouped.setdefault(parent, []).append(relative_path)
+                for parent, names in sorted(grouped.items(), key=lambda item: item[0]):
+                    self.delete_files_via_webui(names, remote_dir=parent)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"delete_webui: {exc}")
 
@@ -1462,6 +1663,17 @@ class Runner:
                 self.created_files.clear()
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"delete_ssh: {exc}")
+
+        if self.preflight_ok and self.created_dirs:
+            try:
+                for directory in sorted(
+                    self.created_dirs,
+                    key=lambda value: len(PurePosixPath(value).parts),
+                    reverse=True,
+                ):
+                    self.remove_remote_directory(directory)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"delete_dirs_ssh: {exc}")
 
         if self.preflight_ok and self.smb_created_files and self.args.smb_share:
             try:
@@ -1479,6 +1691,7 @@ class Runner:
                 errors.append(f"delete_smb: {exc}")
 
         details["leftover_webui_files_after"] = sorted(self.created_files)
+        details["leftover_webui_dirs_after"] = sorted(self.created_dirs)
         details["leftover_smb_files_after"] = sorted(self.smb_created_files)
 
         if errors:
@@ -1774,19 +1987,120 @@ class Runner:
             pass
         self.switch_mode("NET")
 
+    def normalize_relative_dir(self, directory: str | None) -> str:
+        if not directory:
+            return ""
+        raw = str(directory).strip()
+        if not raw or raw == ".":
+            return ""
+        if raw.startswith("/"):
+            raise RuntimeError(f"Nieprawidlowa sciezka wzgledna: {directory!r}")
+        normalized = str(PurePosixPath(raw)).strip().strip("/")
+        if normalized in {"", "."}:
+            return ""
+        if normalized.startswith("..") or "/../" in f"/{normalized}/":
+            raise RuntimeError(f"Nieprawidlowa sciezka wzgledna: {directory!r}")
+        return normalized
+
+    def join_relative_path(self, directory: str | None, name: str) -> str:
+        base = self.normalize_relative_dir(directory)
+        file_name = str(PurePosixPath(name).name)
+        if base:
+            return f"{base}/{file_name}"
+        return file_name
+
+    def resolve_remote_directory(self, directory: str | None) -> str:
+        if not self.upload_dir:
+            raise RuntimeError("Brak upload_dir do obslugi podfolderow.")
+        normalized = self.normalize_relative_dir(directory)
+        base = PurePosixPath(self.upload_dir)
+        if not normalized:
+            return str(base)
+        return str(base / PurePosixPath(normalized))
+
+    def create_remote_directory(self, directory: str) -> dict[str, Any]:
+        normalized = self.normalize_relative_dir(directory)
+        if not normalized:
+            raise RuntimeError("Brak nazwy katalogu do utworzenia.")
+        remote_path = self.resolve_remote_directory(normalized)
+        result = self.ssh_exec(f"mkdir -p -- {shlex.quote(remote_path)}", check=True)
+        self.created_dirs.add(normalized)
+        return {
+            "directory": normalized,
+            "remote_path": remote_path,
+            "stdout": result["stdout"],
+        }
+
+    def remove_remote_directory(self, directory: str) -> bool:
+        normalized = self.normalize_relative_dir(directory)
+        if not normalized:
+            return False
+        remote_path = self.resolve_remote_directory(normalized)
+        result = self.ssh_exec(
+            f"if [ -d {shlex.quote(remote_path)} ]; then rmdir -- {shlex.quote(remote_path)}; fi",
+            check=False,
+        )
+        removed = result["exit_status"] == 0 and not self.remote_path_exists(normalized)
+        if removed:
+            self.created_dirs.discard(normalized)
+        return removed
+
+    def remote_path_exists(self, relative_path: str) -> bool:
+        target_path = self.resolve_remote_directory(relative_path)
+        result = self.ssh_exec(f"test -e {shlex.quote(target_path)}", check=False)
+        return result["exit_status"] == 0
+
+    def fetch_webui_directory_listing(self, directory: str | None = None) -> dict[str, Any]:
+        self.ensure_requests_session()
+        assert self.session is not None
+
+        params: dict[str, str] = {}
+        normalized = self.normalize_relative_dir(directory)
+        if normalized:
+            params["dir"] = normalized
+        response = self.session.get(
+            urljoin(self.webui_url + "/", ""),
+            params=params,
+            timeout=self.args.http_timeout,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+
+        parser = WebUiDirectoryParser()
+        parser.feed(response.text)
+        parser.close()
+
+        return {
+            "directory": normalized,
+            "http_status": response.status_code,
+            "files": sorted(set(parser.file_values), key=str.casefold),
+            "dirs": sorted(set(parser.dir_values), key=str.casefold),
+            "url": response.url,
+        }
+
     def create_local_file(self, name: str, lines: list[str]) -> Path:
         path = self.local_temp_dir / name
         content = "\n".join(lines) + "\n"
         path.write_text(content, encoding="utf-8")
         return path
 
-    def upload_file_via_webui(self, local_file: Path) -> dict[str, Any]:
+    def upload_file_via_webui(
+        self,
+        local_file: Path,
+        *,
+        remote_dir: str | None = None,
+    ) -> dict[str, Any]:
         self.ensure_requests_session()
         assert self.session is not None
 
+        normalized_dir = self.normalize_relative_dir(remote_dir)
+        form_data: dict[str, str] = {}
+        if normalized_dir:
+            form_data["dir"] = normalized_dir
         with local_file.open("rb") as handle:
             response = self.session.post(
                 urljoin(self.webui_url + "/", "upload"),
+                data=form_data,
                 files={"file": (local_file.name, handle)},
                 timeout=self.args.http_timeout,
                 allow_redirects=False,
@@ -1798,15 +2112,25 @@ class Runner:
             )
 
         message = self.extract_redirect_message(response)
-        self.created_files.add(local_file.name)
+        relative_path = self.join_relative_path(normalized_dir, local_file.name)
+        self.created_files.add(relative_path)
         return {
             "file": local_file.name,
+            "relative_path": relative_path,
+            "directory": normalized_dir,
             "http_status": response.status_code,
             "redirect_message": message,
         }
 
-    def upload_files_via_webui(self, count: int, label: str) -> list[str]:
+    def upload_files_via_webui(
+        self,
+        count: int,
+        label: str,
+        *,
+        remote_dir: str | None = None,
+    ) -> list[str]:
         uploaded: list[str] = []
+        normalized_dir = self.normalize_relative_dir(remote_dir)
         for index in range(1, count + 1):
             file_name = f"{self.run_prefix}_{label}_{index:02d}.nc"
             local_file = self.create_local_file(
@@ -1820,18 +2144,27 @@ class Runner:
                     "%",
                 ],
             )
-            self.upload_file_via_webui(local_file)
+            self.upload_file_via_webui(local_file, remote_dir=normalized_dir)
             uploaded.append(file_name)
         return uploaded
 
-    def delete_files_via_webui(self, file_names: list[str]) -> dict[str, Any]:
+    def delete_files_via_webui(
+        self,
+        file_names: list[str],
+        *,
+        remote_dir: str | None = None,
+        require_success: bool = True,
+    ) -> dict[str, Any]:
         if not file_names:
             return {"deleted": []}
 
         self.ensure_requests_session()
         assert self.session is not None
 
+        normalized_dir = self.normalize_relative_dir(remote_dir)
         payload: list[tuple[str, str]] = [("confirm_delete", "yes")]
+        if normalized_dir:
+            payload.append(("dir", normalized_dir))
         payload.extend(("files", name) for name in file_names)
 
         response = self.session.post(
@@ -1847,14 +2180,18 @@ class Runner:
 
         message = self.extract_redirect_message(response)
         lowered = message.casefold()
-        if "nie udalo" in lowered or "bled" in lowered:
+        success = "nie udalo" not in lowered and "bled" not in lowered
+        if require_success and not success:
             raise RuntimeError(f"WebUI delete zwrócił błąd: {message}")
 
-        for name in file_names:
-            self.created_files.discard(name)
+        if success:
+            for name in file_names:
+                self.created_files.discard(name)
 
         return {
             "deleted": sorted(file_names),
+            "directory": normalized_dir,
+            "success": success,
             "http_status": response.status_code,
             "redirect_message": message,
         }
@@ -1899,16 +2236,19 @@ class Runner:
             "import json\n"
             "from pathlib import Path\n"
             f"root = Path({directory!r})\n"
-            f"wanted = set({wanted_literal})\n"
+            f"wanted = list({wanted_literal})\n"
             "payload = {}\n"
             "if root.is_dir():\n"
-            "    for path in sorted(root.iterdir(), key=lambda p: p.name.casefold()):\n"
-            "        if not path.is_file():\n"
+            "    for relative in wanted:\n"
+            "        candidate = (root / relative).resolve()\n"
+            "        try:\n"
+            "            candidate.relative_to(root.resolve())\n"
+            "        except ValueError:\n"
             "            continue\n"
-            "        if path.name not in wanted:\n"
+            "        if not candidate.is_file():\n"
             "            continue\n"
-            "        digest = hashlib.sha256(path.read_bytes()).hexdigest()\n"
-            "        payload[path.name] = digest\n"
+            "        digest = hashlib.sha256(candidate.read_bytes()).hexdigest()\n"
+            "        payload[relative] = digest\n"
             "print(json.dumps(payload, ensure_ascii=True, sort_keys=True))\n"
             "PY"
         )
