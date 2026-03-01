@@ -6,7 +6,7 @@
 - Python 3 (wymagany przez WebUI)
 - Git
 - Dostęp root (sudo)
-- Repozytorium w ścieżce: `/home/andrzej/cnc-control` (wymagane przez unit systemd)
+- Pakiety SHADOW: `dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`
 
 ### Platforma sprzętowa (docelowa i testowa)
 
@@ -34,11 +34,17 @@ CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 Skrypt przygotowuje system, pobiera repozytorium, tworzy `.venv`,
 instaluje zależności i konfiguruje usługi systemd.
 
+Po pierwszej instalacji wykonaj restart, aby aktywować `dwc2/UDC`:
+
+```bash
+sudo reboot
+```
+
 ## Instalacja krok po kroku
 
 ```bash
-git clone https://github.com/<twoj-user>/cnc-control.git /home/andrzej/cnc-control
-cd /home/andrzej/cnc-control
+git clone https://github.com/<twoj-user>/cnc-control.git ~/cnc-control
+cd ~/cnc-control
 python3 tools/bootstrap_env.py --target rpi
 sudo ./tools/setup_system.sh
 ```
@@ -52,10 +58,10 @@ Brak tych uprawnien powoduje kontrolowany blad krytyczny `ERR_MISSING_SUDO`.
 Minimalny profil sudoers:
 
 ```text
-cnc ALL=(root) NOPASSWD: /bin/mount
-cnc ALL=(root) NOPASSWD: /bin/umount
-cnc ALL=(root) NOPASSWD: /sbin/modprobe
-cnc ALL=(root) NOPASSWD: /bin/lsmod
+cnc ALL=(root) NOPASSWD: /usr/bin/mount
+cnc ALL=(root) NOPASSWD: /usr/bin/umount
+cnc ALL=(root) NOPASSWD: /usr/sbin/modprobe
+cnc ALL=(root) NOPASSWD: /usr/bin/lsmod
 ```
 
 Zasady:
@@ -65,7 +71,7 @@ Zasady:
 
 Zaleznosci aplikacji sa zarzadzane przez `pyproject.toml`.
 Uslugi `cnc-webui.service` oraz `cnc-led.service` preferuja interpreter
-`/home/andrzej/cnc-control/.venv/bin/python3` (fallback do systemowego `python3`
+`<repo>/.venv/bin/python3` (fallback do systemowego `python3`
 przez skrypty `setup_webui.sh` i `setup_led_service.sh`, gdy venv nie istnieje).
 
 ## Profile srodowiska (DEV/RPI)
@@ -98,12 +104,21 @@ Centralna konfiguracja znajduje się w pliku:
 
 Skrypt `tools/setup_system.sh` kopiuje tam domyślny plik `config/cnc-control.env.example` tylko jeśli nie istnieje. Po instalacji uzupełnij wartości i zapisz plik.
 
-## Zmienne środowiskowe
+## Zmienne środowiskowe (SHADOW-only)
 
-- `CNC_USB_IMG` – ścieżka do obrazu USB Mass Storage.
-- `CNC_USB_LABEL` – etykieta FAT widoczna na hoście USB (maks. 11 znaków).
-- `CNC_MOUNT_POINT` – punkt montowania obrazu (upload G-code).
-- `CNC_UPLOAD_DIR` – katalog, do którego WebUI zapisuje pliki.
+Minimalny zestaw wymagany:
+
+- `CNC_SHADOW_ENABLED=true`
+- `CNC_MASTER_DIR=/var/lib/cnc-control/master`
+- `CNC_USB_IMG_A=/var/lib/cnc-control/cnc_usb_a.img`
+- `CNC_USB_IMG_B=/var/lib/cnc-control/cnc_usb_b.img`
+- `CNC_ACTIVE_SLOT_FILE=/var/lib/cnc-control/shadow_active_slot.state`
+- `CNC_SHADOW_STATE_FILE=/var/lib/cnc-control/shadow_state.json`
+- `CNC_SHADOW_HISTORY_FILE=/var/lib/cnc-control/shadow_history.json`
+- `CNC_SHADOW_SLOT_SIZE_MB=1024`
+- `CNC_SHADOW_TMP_SUFFIX=.tmp`
+- `CNC_SHADOW_LOCK_FILE=/var/run/cnc-shadow.lock`
+- `CNC_SHADOW_CONFIG_VERSION=1`
 
 ## Awaryjny tryb Wi-Fi (Access Point)
 
@@ -161,7 +176,7 @@ odwzorować zachowanie trybu awaryjnego.
 ## PolicyKit (restart GUI)
 
 Skrypt `tools/setup_system.sh` instaluje regułę PolicyKit, która pozwala
-użytkownikowi WebUI (`andrzej`) wykonać `systemctl restart cnc-webui.service`
+użytkownikowi WebUI (uzytkownik instalacji) wykonać `systemctl restart cnc-webui.service`
 bez podawania hasła. Przy instalacji ręcznej skopiuj plik
 `systemd/polkit/50-cnc-webui-restart.rules` do `/etc/polkit-1/rules.d/`.
 
@@ -208,7 +223,7 @@ Instalacja usługi:
 
 ```bash
 chmod +x tools/setup_led_service.sh
-sudo tools/setup_led_service.sh /home/andrzej/cnc-control
+sudo tools/setup_led_service.sh ~/cnc-control
 ```
 
 Mapowanie trybów:

@@ -14,6 +14,12 @@ APT_PACKAGES=(
     openssh-server
     curl
     samba
+    dosfstools
+    mtools
+    util-linux
+    inotify-tools
+    kmod
+    rsync
 )
 
 run_as_root() {
@@ -88,6 +94,49 @@ run_as_install_user() {
     exit 1
 }
 
+validate_shadow_env() {
+    local env_file="/etc/cnc-control/cnc-control.env"
+    local missing=()
+    local key=""
+
+    if [ ! -f "${env_file}" ]; then
+        echo "[ERROR] Brak pliku konfiguracji: ${env_file}"
+        exit 1
+    fi
+
+    # shellcheck source=/etc/cnc-control/cnc-control.env
+    set -a
+    source "${env_file}"
+    set +a
+
+    if [ "${CNC_SHADOW_ENABLED:-}" != "true" ]; then
+        echo "[ERROR] Wymagany tryb SHADOW-only: CNC_SHADOW_ENABLED musi miec wartosc 'true'."
+        exit 1
+    fi
+
+    for key in \
+        CNC_MASTER_DIR \
+        CNC_USB_IMG_A \
+        CNC_USB_IMG_B \
+        CNC_ACTIVE_SLOT_FILE \
+        CNC_SHADOW_STATE_FILE \
+        CNC_SHADOW_HISTORY_FILE \
+        CNC_SHADOW_SLOT_SIZE_MB \
+        CNC_SHADOW_TMP_SUFFIX \
+        CNC_SHADOW_LOCK_FILE \
+        CNC_SHADOW_CONFIG_VERSION
+    do
+        if [ -z "${!key:-}" ]; then
+            missing+=("${key}")
+        fi
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo "[ERROR] Brak wymaganych zmiennych SHADOW w ${env_file}: ${missing[*]}"
+        exit 1
+    fi
+}
+
 echo "=== CNC Bootstrap Start ==="
 
 if ! command -v apt-get >/dev/null 2>&1; then
@@ -149,15 +198,16 @@ if [ ! -x "${VENV_PIP}" ]; then
     exit 1
 fi
 run_as_install_user "${VENV_PIP}" install --upgrade pip
-if run_as_install_user "${VENV_PIP}" install --upgrade "${REPO_DIR}[rpi]"; then
+if run_as_install_user "${VENV_PIP}" install --upgrade --editable "${REPO_DIR}[rpi]"; then
     echo "[INFO] Zainstalowano zaleznosci bazowe i LED z pyproject.toml."
 else
     echo "[WARN] Instalacja dodatku LED nieudana. Instalacja samych zaleznosci bazowych."
-    run_as_install_user "${VENV_PIP}" install --upgrade "${REPO_DIR}"
+    run_as_install_user "${VENV_PIP}" install --upgrade --editable "${REPO_DIR}"
 fi
 
 echo "[6/9] Instalacja konfiguracji systemowej cnc-control"
-run_as_root bash "${REPO_DIR}/tools/setup_system.sh"
+run_as_root env SUDO_USER="${INSTALL_USER}" CNC_INSTALL_USER="${INSTALL_USER}" bash "${REPO_DIR}/tools/setup_system.sh"
+validate_shadow_env
 
 echo "[7/9] Instalacja skrotow CLI"
 run_as_root bash "${REPO_DIR}/tools/setup_commands.sh"
@@ -184,3 +234,4 @@ echo "Repozytorium: ${REPO_DIR}"
 echo "Srodowisko Python: ${VENV_DIR}"
 echo "Uzytkownik uslug: ${INSTALL_USER}"
 echo "Sprawdz: systemctl status cnc-webui cnc-usb cnc-led"
+echo "Uwaga: po pierwszej instalacji wykonaj reboot, aby aktywowac dwc2/UDC."

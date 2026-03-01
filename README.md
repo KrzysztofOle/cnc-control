@@ -57,6 +57,7 @@ Projekt jest rozwijany hobbystycznie, z naciskiem na **praktyczne zastosowanie w
 - 🐍 Python 3.9+
 - 📦 pip / venv
 - 🔧 Git
+- 🧰 Pakiety SHADOW: `dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`
 
 Opcjonalnie:
 - Samba / FTP
@@ -66,11 +67,8 @@ Opcjonalnie:
 
 ## 🚀 Instalacja
 
-```bash
-git clone https://github.com/<twoj-user>/cnc-control.git
-cd cnc-control
-python3 tools/bootstrap_env.py --target rpi
-```
+Preferowana instalacja RPi to bootstrap systemowy (`tools/bootstrap_cnc.sh`).
+Tryb `bootstrap_env.py` jest przeznaczony glownie do przygotowania samego Python venv.
 
 Dla komputera developerskiego:
 
@@ -111,9 +109,16 @@ CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 
 Skrypt automatycznie:
 - zaktualizuje system (`apt update/upgrade`),
-- utworzy `.venv` i zainstaluje zależności z `pyproject.toml` (z próbą dodatku `rpi-ws281x`),
+- zainstaluje pakiety SHADOW (`dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`),
+- utworzy `.venv` i wykona `pip install --editable ".[rpi]"`,
 - pobierze/odświeży repo `cnc-control` po HTTPS,
 - uruchomi `setup_system.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+
+Po pierwszej instalacji wykonaj reboot:
+
+```bash
+sudo reboot
+```
 
 Opcjonalne nadpisanie użytkownika i katalogu repo:
 
@@ -328,7 +333,7 @@ Wymagane zmienne dla trybu SHADOW-only:
 
 | Zmienna | Opis | Domyslna wartosc | Uzycie |
 |---|---|---|---|
-| `CNC_SHADOW_ENABLED` | Flaga trybu SHADOW (ustaw `true`) | `false` | `webui/app.py`, `tools/cnc_selftest.sh` |
+| `CNC_SHADOW_ENABLED` | Flaga trybu SHADOW (ustaw `true`) | `true` | `webui/app.py`, `tools/cnc_selftest.sh` |
 | `CNC_MASTER_DIR` | Katalog roboczy SHADOW (zrodlo plikow) | `/var/lib/cnc-control/master` | `shadow/watcher_service.py`, `shadow/rebuild_engine.py` |
 | `CNC_USB_IMG_A` | Sciezka obrazu USB dla slotu A | `/var/lib/cnc-control/cnc_usb_a.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
 | `CNC_USB_IMG_B` | Sciezka obrazu USB dla slotu B | `/var/lib/cnc-control/cnc_usb_b.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
@@ -337,7 +342,7 @@ Pozostale zmienne (opcjonalne):
 
 | Zmienna | Opis | Domyslna wartosc | Uzycie |
 |---|---|---|---|
-| `CNC_CONTROL_REPO` | Sciezka do repo (dla `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
+| `CNC_CONTROL_REPO` | Sciezka do repo (dla `git pull`) | `/home/cnc/cnc-control` | `webui/app.py` |
 | `CNC_WEBUI_LOG` | Sciezka do pliku logu webui | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | Nazwa unita systemd dla webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Zakres czasu dla `journalctl` (np. `24 hours ago`) | `24 hours ago` | `webui/app.py` |

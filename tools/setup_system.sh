@@ -393,6 +393,71 @@ create_usb_image_if_missing() {
     echo "[INFO] Utworzono obraz USB: ${image_path} (${size_mb}MB, label=${usb_label})"
 }
 
+create_shadow_slots_if_missing() {
+    local image_a="${CNC_USB_IMG_A:-/var/lib/cnc-control/cnc_usb_a.img}"
+    local image_b="${CNC_USB_IMG_B:-/var/lib/cnc-control/cnc_usb_b.img}"
+    local slot_size_mb="${CNC_SHADOW_SLOT_SIZE_MB:-256}"
+    local usb_label="${CNC_USB_LABEL:-CNC_USB}"
+    local active_slot_file="${CNC_ACTIVE_SLOT_FILE:-/var/lib/cnc-control/shadow_active_slot.state}"
+    local initial_active_slot="${CNC_ACTIVE_SLOT:-A}"
+    local parent_dir=""
+
+    if ! [[ "${slot_size_mb}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Nieprawidlowa wartosc CNC_SHADOW_SLOT_SIZE_MB: ${slot_size_mb}"
+        exit 1
+    fi
+
+    if [ -z "${usb_label}" ]; then
+        echo "Nieprawidlowa wartosc CNC_USB_LABEL: pusty label."
+        exit 1
+    fi
+
+    if [ "${#usb_label}" -gt 11 ]; then
+        echo "Nieprawidlowa wartosc CNC_USB_LABEL: maksymalnie 11 znakow dla FAT."
+        exit 1
+    fi
+
+    if ! command -v mkfs.vfat >/dev/null 2>&1; then
+        echo "Brak mkfs.vfat. Zainstaluj pakiet dosfstools."
+        exit 1
+    fi
+
+    for slot_path in "${image_a}" "${image_b}"; do
+        if [ -e "${slot_path}" ] && [ ! -f "${slot_path}" ]; then
+            echo "Sciezka slotu SHADOW nie wskazuje na zwykly plik: ${slot_path}"
+            exit 1
+        fi
+        if [ -f "${slot_path}" ] && [ -s "${slot_path}" ]; then
+            continue
+        fi
+        mkdir -p "$(dirname "${slot_path}")"
+        truncate -s "${slot_size_mb}M" "${slot_path}"
+        mkfs.vfat -F 32 -n "${usb_label}" "${slot_path}" >/dev/null
+        chmod 664 "${slot_path}"
+        echo "[INFO] Utworzono slot SHADOW: ${slot_path} (${slot_size_mb}MB, label=${usb_label})"
+    done
+
+    initial_active_slot="$(printf '%s' "${initial_active_slot}" | tr '[:lower:]' '[:upper:]')"
+    case "${initial_active_slot}" in
+        A|B) ;;
+        *)
+            echo "Nieprawidlowa wartosc CNC_ACTIVE_SLOT: ${initial_active_slot}"
+            exit 1
+            ;;
+    esac
+
+    if [ ! -f "${active_slot_file}" ]; then
+        parent_dir="$(dirname "${active_slot_file}")"
+        mkdir -p "${parent_dir}"
+        tmp_slot_file="$(mktemp "${parent_dir}/shadow-active-slot.XXXXXX")"
+        printf '%s\n' "${initial_active_slot}" > "${tmp_slot_file}"
+        sync "${tmp_slot_file}" 2>/dev/null || true
+        mv "${tmp_slot_file}" "${active_slot_file}"
+        chmod 664 "${active_slot_file}"
+        echo "[INFO] Utworzono CNC_ACTIVE_SLOT_FILE: ${active_slot_file} (${initial_active_slot})"
+    fi
+}
+
 if [ ! -f "${SYSTEMD_SERVICE_SRC}" ]; then
     echo "Brak pliku unita: ${SYSTEMD_SERVICE_SRC}"
     exit 1
@@ -430,7 +495,7 @@ fi
 
 if command -v dpkg >/dev/null 2>&1; then
     missing_pkgs=()
-    for pkg in hostapd dnsmasq dosfstools; do
+    for pkg in hostapd dnsmasq dosfstools mtools util-linux inotify-tools kmod rsync; do
         if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
             missing_pkgs+=("${pkg}")
         fi
@@ -460,6 +525,18 @@ fi
 chown root:root "${ENV_DEST}"
 chmod 644 "${ENV_DEST}"
 upsert_env_var "${ENV_DEST}" "CNC_CONTROL_REPO" "${REPO_ROOT}"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_ENABLED" "true"
+upsert_env_var "${ENV_DEST}" "CNC_MASTER_DIR" "/var/lib/cnc-control/master"
+upsert_env_var "${ENV_DEST}" "CNC_USB_IMG_A" "/var/lib/cnc-control/cnc_usb_a.img"
+upsert_env_var "${ENV_DEST}" "CNC_USB_IMG_B" "/var/lib/cnc-control/cnc_usb_b.img"
+upsert_env_var "${ENV_DEST}" "CNC_ACTIVE_SLOT" "A"
+upsert_env_var "${ENV_DEST}" "CNC_ACTIVE_SLOT_FILE" "/var/lib/cnc-control/shadow_active_slot.state"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_STATE_FILE" "/var/lib/cnc-control/shadow_state.json"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_HISTORY_FILE" "/var/lib/cnc-control/shadow_history.json"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_SLOT_SIZE_MB" "1024"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_TMP_SUFFIX" ".tmp"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_LOCK_FILE" "/var/run/cnc-shadow.lock"
+upsert_env_var "${ENV_DEST}" "CNC_SHADOW_CONFIG_VERSION" "1"
 upsert_env_var "${ENV_DEST}" "CNC_SHADOW_DEBOUNCE_SECONDS" "2"
 
 # shellcheck source=/etc/cnc-control/cnc-control.env
@@ -480,6 +557,12 @@ fi
 
 if is_true_value "${CNC_SHADOW_ENABLED:-false}"; then
     resolve_shadow_runtime_identity
+    if { [ -z "${SHADOW_RUNTIME_USER}" ] || [ "${SHADOW_RUNTIME_USER}" = "root" ]; } && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        if id -u "${SUDO_USER}" >/dev/null 2>&1; then
+            SHADOW_RUNTIME_USER="${SUDO_USER}"
+            SHADOW_RUNTIME_GROUP="$(id -gn "${SUDO_USER}" 2>/dev/null || true)"
+        fi
+    fi
     if [ -n "${SHADOW_RUNTIME_USER}" ]; then
         echo "[INFO] SHADOW runtime user: ${SHADOW_RUNTIME_USER}"
     fi
@@ -492,7 +575,11 @@ else
     chmod 755 /var/lib/cnc-control
 fi
 
-create_usb_image_if_missing
+if is_true_value "${CNC_SHADOW_ENABLED:-false}"; then
+    create_shadow_slots_if_missing
+else
+    create_usb_image_if_missing
+fi
 
 if is_true_value "${CNC_SHADOW_ENABLED:-false}"; then
     echo "[INFO] SHADOW wlaczony - pozostawiam wlasciciela i uprawnienia: ${SAMBA_SHARE_PATH}"
