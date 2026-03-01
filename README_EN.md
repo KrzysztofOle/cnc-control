@@ -168,6 +168,9 @@ The tag description is displayed in the WebUI.
 ./tools/cnc_selftest.sh
 ./tools/cnc_selftest.sh --verbose
 ./tools/cnc_selftest.sh --json
+./tools/cnc_install_validation.sh
+./tools/cnc_install_validation.sh --json
+./tools/cnc_install_validation.sh --strict
 ```
 
 ## 🧪 Selftest v2 (Python, SHADOW-only)
@@ -207,6 +210,19 @@ Field meaning:
 - exit `0` -> `critical == 0`
 - exit `1` -> `critical > 0`
 - `warnings` and `system_noise` do not block CI
+
+## tools/cnc_install_validation.sh
+
+System installation validator for SHADOW-only mode (read-only checks, no system modifications).
+
+Modes:
+- default: human-readable text report,
+- `--json`: JSON report,
+- `--strict`: FAIL when any WARN appears.
+
+Exit code:
+- `0` = PASS,
+- `1` = FAIL.
 
 ---
 
@@ -408,6 +424,7 @@ cnc-control/
 | `tools/setup_nmtui.sh` | Installs and launches `nmtui`. |
 | `tools/setup_zerotier.sh` | Configures the ZeroTier client. |
 | `tools/wifi_control.sh` | Helper script for Wi-Fi scan/connect (`nmcli`). |
+| `tools/cnc_install_validation.sh` | SHADOW-only system install validation (packages, env, slots, state, systemd, g_mass_storage, LUN). |
 | `webui/` | Simple web UI for tool access. |
 | `webui/app.py` | Web application (server) for webui. |
 

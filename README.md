@@ -164,6 +164,9 @@ Opis taga jest wyświetlany w WebUI.
 ./tools/cnc_selftest.sh
 ./tools/cnc_selftest.sh --verbose
 ./tools/cnc_selftest.sh --json
+./tools/cnc_install_validation.sh
+./tools/cnc_install_validation.sh --json
+./tools/cnc_install_validation.sh --strict
 ```
 
 ## 🧪 Selftest v2 (Python, SHADOW-only)
@@ -203,6 +206,19 @@ Znaczenie pól:
 - exit `0` -> `critical == 0`
 - exit `1` -> `critical > 0`
 - `warnings` i `system_noise` nie blokują CI
+
+## tools/cnc_install_validation.sh
+
+Walidator instalacji systemowej SHADOW-only (tryb tylko do odczytu, bez modyfikacji systemu).
+
+Tryby:
+- domyslny: czytelny raport tekstowy,
+- `--json`: raport JSON,
+- `--strict`: FAIL, jesli wystapi WARN.
+
+Exit code:
+- `0` = PASS,
+- `1` = FAIL.
 
 ---
 
@@ -404,6 +420,7 @@ cnc-control/
 | `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |
 | `tools/setup_zerotier.sh` | Konfiguracja klienta ZeroTier. |
 | `tools/wifi_control.sh` | Skrypt pomocniczy do skanowania i łączenia Wi-Fi (`nmcli`). |
+| `tools/cnc_install_validation.sh` | Walidacja instalacji systemowej SHADOW-only (pakiety, env, sloty, state, systemd, g_mass_storage, LUN). |
 | `webui/` | Prosty interfejs WWW do obsługi narzędzi. |
 | `webui/app.py` | Aplikacja webowa (serwer) dla webui. |
 
