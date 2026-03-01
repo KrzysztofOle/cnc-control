@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import platform
-import re
 import shlex
 import shutil
 import socket
@@ -18,9 +17,12 @@ import time
 import types
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urljoin, urlparse
+
+from cnc_control.selftest.core import run_selftest
 
 # PL: Zapewnia wpis modułu dla loaderow testowych, ktore nie rejestruja modułu w sys.modules.
 # EN: Ensures module registration for test loaders that do not register it in sys.modules.
@@ -38,6 +40,8 @@ def parse_status_mode(output: str) -> str | None:
         if "Tryb pracy:" not in line:
             continue
         value = line.split("Tryb pracy:", 1)[1].strip().casefold()
+        if value.startswith("shadow"):
+            return "SHADOW"
         if value.startswith("usb"):
             return "USB"
         if value.startswith("siec") or value.startswith("sieć"):
@@ -175,6 +179,33 @@ class SkipPhaseError(RuntimeError):
     """Raised when a phase should be explicitly skipped."""
 
 
+class WebUiDirectoryParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.file_values: list[str] = []
+        self.dir_values: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {key: (value or "") for key, value in attrs}
+        if tag == "input":
+            if attr_map.get("name") == "files" and attr_map.get("type") == "checkbox":
+                value = attr_map.get("value", "").strip()
+                if value:
+                    self.file_values.append(value)
+            return
+
+        if tag != "a":
+            return
+        classes = set(filter(None, attr_map.get("class", "").split()))
+        if "cnc-file-link-dir" not in classes:
+            return
+        href = attr_map.get("href", "")
+        query = parse_qs(urlparse(href).query)
+        value = (query.get("dir") or [""])[0].strip()
+        if value:
+            self.dir_values.append(value)
+
+
 class Runner:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -189,12 +220,18 @@ class Runner:
         self.mount_point: str | None = None
         self.udc_name: str | None = None
         self.shadow_enabled = False
+        self.shadow_master_dir: str | None = None
         self.webui_url = (args.webui_url or f"http://{args.host}:8080").rstrip("/")
         run_stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         self.run_prefix = f"it_{run_stamp}_{Path.cwd().name}"
         self.local_temp_dir = Path(tempfile.mkdtemp(prefix="cnc_it_"))
         self.created_files: set[str] = set()
+        self.created_dirs: set[str] = set()
         self.smb_created_files: set[str] = set()
+
+    def log_console(self, message: str) -> None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+        print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
 
     def close(self) -> None:
         if self.ssh_client is not None:
@@ -207,6 +244,11 @@ class Runner:
 
     def run(self) -> None:
         selected = self.resolve_selected_phases(self.args.mode)
+        selected_names = [name for name, _fn in selected]
+        self.log_console(
+            "START integration run: "
+            f"mode={self.args.mode}, phases={['phase_0_preflight', *selected_names, 'phase_6_cleanup']}"
+        )
         self.run_phase("phase_0_preflight", self.phase_0_preflight)
 
         for phase_name, phase_fn in selected:
@@ -221,6 +263,7 @@ class Runner:
             self.run_phase(phase_name, phase_fn)
 
         self.run_phase("phase_6_cleanup", self.phase_6_cleanup)
+        self.log_console("END integration run")
 
     def resolve_selected_phases(
         self, mode: str
@@ -233,12 +276,20 @@ class Runner:
             "usb": [("phase_3_usb", self.phase_3_usb)],
             "sync": [("phase_4_sync_net_to_usb", self.phase_4_sync_net_to_usb)],
             "perf": [("phase_5_performance", self.phase_5_performance)],
+            "shadow": [
+                ("phase_shadow_1_watcher", self.phase_shadow_1_watcher),
+                ("phase_shadow_2_sync_files", self.phase_shadow_2_sync_files),
+                ("phase_shadow_3_gcode_runtime", self.phase_shadow_3_gcode_runtime),
+            ],
             "all": [
                 ("phase_1_net_webui", self.phase_1_net_webui),
                 ("phase_2_smb", self.phase_2_smb),
                 ("phase_3_usb", self.phase_3_usb),
                 ("phase_4_sync_net_to_usb", self.phase_4_sync_net_to_usb),
                 ("phase_5_performance", self.phase_5_performance),
+                ("phase_shadow_1_watcher", self.phase_shadow_1_watcher),
+                ("phase_shadow_2_sync_files", self.phase_shadow_2_sync_files),
+                ("phase_shadow_3_gcode_runtime", self.phase_shadow_3_gcode_runtime),
             ],
         }
         return phase_map[mode]
@@ -246,6 +297,7 @@ class Runner:
     def run_phase(
         self, name: str, action: Callable[[], dict[str, Any]]
     ) -> None:
+        self.log_console(f"PHASE START: {name}")
         started = time.perf_counter()
         status = "passed"
         details: dict[str, Any] = {}
@@ -270,6 +322,10 @@ class Runner:
                 error=error,
             )
         )
+        summary = f"PHASE END: {name} -> {status} ({duration:.3f}s)"
+        if error:
+            summary = f"{summary}; reason={error}"
+        self.log_console(summary)
         if name == "phase_0_preflight" and status == "passed":
             self.preflight_ok = True
 
@@ -326,6 +382,9 @@ class Runner:
         self.shadow_enabled = shadow_from_env in {"1", "true", "yes", "on"}
         if str(api_status.get("mode") or "").upper() == "SHADOW":
             self.shadow_enabled = True
+        self.shadow_master_dir = env_payload.get("CNC_MASTER_DIR") or "/var/lib/cnc-control/master"
+        if self.shadow_enabled:
+            self.upload_dir = self.shadow_master_dir
 
         return {
             "ssh": {
@@ -339,6 +398,7 @@ class Runner:
                 "upload_dir": self.upload_dir,
                 "mount_point": self.mount_point,
                 "shadow_enabled": env_payload.get("CNC_SHADOW_ENABLED"),
+                "shadow_master_dir": self.shadow_master_dir,
             },
             "status_sh": {
                 "mode": status_mode,
@@ -367,6 +427,7 @@ class Runner:
                 "status": "skipped",
                 "reason": "Skipped by --skip-remote-refresh.",
             }
+        self.log_console(f"REMOTE REFRESH: repo={repo_path}")
 
         repo_path_quoted = shlex.quote(repo_path)
         venv_dir = env_payload.get("CNC_VENV_DIR") or str(PurePosixPath(repo_path) / ".venv")
@@ -398,6 +459,7 @@ class Runner:
             timeout=self.args.remote_refresh_timeout,
             check=True,
         )
+        self.log_console("REMOTE REFRESH: git pull --ff-only done")
 
         head_after_result = self.ssh_exec(
             f"git -C {repo_path_quoted} rev-parse HEAD",
@@ -419,6 +481,7 @@ class Runner:
             timeout=self.args.remote_refresh_timeout,
             check=True,
         )
+        self.log_console("REMOTE REFRESH: editable install done")
 
         config_refresh_command = (
             "set -euo pipefail\n"
@@ -442,12 +505,14 @@ class Runner:
             timeout=self.args.remote_refresh_timeout,
             check=True,
         )
+        self.log_console("REMOTE REFRESH: setup_webui/setup_usb/setup_led done")
 
         selftest_report = self.run_remote_selftest_with_auto_repair(
             repo_path=repo_path,
             venv_dir=venv_dir,
             env_payload=env_payload,
         )
+        self.log_console("REMOTE REFRESH: cnc_selftest completed")
         selftest_result = selftest_report["result"]
         selftest_payload = selftest_report["payload"]
 
@@ -469,28 +534,6 @@ class Runner:
                     f"Wymagana usługa systemd nie jest aktywna: {service_name} -> {state or 'unknown'}"
                 )
 
-        journal_result = self.ssh_exec(
-            "journalctl -p 3 -n 20 --no-pager",
-            check=False,
-        )
-        if journal_result["exit_status"] != 0:
-            fallback_journal = self.ssh_exec(
-                "sudo -n journalctl -p 3 -n 20 --no-pager",
-                check=True,
-            )
-            journal_output = fallback_journal["stdout"]
-        else:
-            journal_output = journal_result["stdout"]
-
-        journal_lines = [line for line in journal_output.splitlines() if line.strip()]
-        journal_cnc_lines = self.filter_cnc_journal_lines(journal_lines)
-        if journal_cnc_lines:
-            journal_preview = "\n".join(journal_cnc_lines[-5:])
-            raise RuntimeError(
-                "Wykryto wpisy ERROR/CRITICAL zwiazane z CNC w journalctl -p 3 -n 20:\n"
-                f"{journal_preview}"
-            )
-
         refresh_details: dict[str, Any] = {
             "status": "ok",
             "repo": {
@@ -506,18 +549,32 @@ class Runner:
                 "path": venv_dir,
             },
             "systemd": systemd_states,
-            "journal_priority_le_3_entries_total": len(journal_lines),
-            "journal_priority_le_3_entries_cnc": len(journal_cnc_lines),
         }
         if isinstance(selftest_payload, dict):
+            selftest_summary = {
+                "status": selftest_payload.get("status"),
+                "critical": selftest_payload.get("critical"),
+                "warnings": selftest_payload.get("warnings"),
+                "system_noise": selftest_payload.get("system_noise"),
+            }
+            journal_section = selftest_payload.get("details")
+            journal_total = None
+            journal_critical = None
+            if isinstance(journal_section, dict):
+                journal_payload = journal_section.get("journal")
+                if isinstance(journal_payload, dict):
+                    journal_total = len(journal_payload.get("checks") or [])
+                    journal_critical = int(journal_payload.get("critical") or 0)
             refresh_details["selftest"] = {
                 "format": "json",
-                "summary": selftest_payload.get("summary"),
-                "result": selftest_payload.get("result"),
+                "summary": selftest_summary,
+                "result": selftest_payload,
                 "attempts": selftest_report["attempts"],
                 "auto_repair_runtime_lun": selftest_report["auto_repair_runtime_lun"],
                 "auto_repair_details": selftest_report.get("auto_repair_details"),
             }
+            refresh_details["journal_priority_le_3_entries_total"] = journal_total
+            refresh_details["journal_priority_le_3_entries_cnc"] = journal_critical
         else:
             refresh_details["selftest"] = {
                 "format": "text",
@@ -591,6 +648,16 @@ class Runner:
         repo_path: str,
         venv_dir: str,
     ) -> tuple[dict[str, Any], Any]:
+        if self.is_local_host_target():
+            local_result = run_selftest()
+            payload = local_result.to_dict()
+            wrapped_result = {
+                "stdout": json.dumps(payload, ensure_ascii=True),
+                "stderr": "",
+                "exit_status": 1 if local_result.critical > 0 else 0,
+            }
+            return wrapped_result, payload
+
         selftest_command = (
             "set -euo pipefail\n"
             f"repo_path={shlex.quote(repo_path)}\n"
@@ -601,7 +668,13 @@ class Runner:
             "  exit 1\n"
             "fi\n"
             ". \"$venv_dir/bin/activate\"\n"
-            "./tools/cnc_selftest.sh --json\n"
+            "python3 - <<'PY'\n"
+            "import json\n"
+            "from cnc_control.selftest.core import run_selftest\n"
+            "result = run_selftest()\n"
+            "print(json.dumps(result.to_dict(), ensure_ascii=True))\n"
+            "raise SystemExit(1 if result.critical > 0 else 0)\n"
+            "PY\n"
         )
         result = self.ssh_exec(
             selftest_command,
@@ -611,13 +684,27 @@ class Runner:
         payload = self.parse_json_if_possible(result["stdout"])
         return result, payload
 
+    def is_local_host_target(self) -> bool:
+        host = (self.args.host or "").strip().casefold()
+        local_aliases = {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+            socket.gethostname().casefold(),
+            socket.getfqdn().casefold(),
+        }
+        return host in local_aliases
+
     def is_runtime_lun_mismatch_failure(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
             return False
-        runtime = payload.get("runtime")
-        if not isinstance(runtime, dict):
+        details = payload.get("details")
+        if not isinstance(details, dict):
             return False
-        checks = runtime.get("checks")
+        shadow_section = details.get("shadow")
+        if not isinstance(shadow_section, dict):
+            return False
+        checks = shadow_section.get("checks")
         if not isinstance(checks, list):
             return False
         mismatch_present = False
@@ -631,9 +718,8 @@ class Runner:
                 break
         if not mismatch_present:
             return False
-        summary = payload.get("summary")
-        if isinstance(summary, dict):
-            critical = int(summary.get("critical") or 0)
+        critical = int(payload.get("critical") or 0)
+        if critical >= 0:
             return critical <= 1
         return True
 
@@ -700,14 +786,12 @@ class Runner:
         ]
 
         if isinstance(payload, dict):
-            summary = payload.get("summary")
-            if isinstance(summary, dict):
-                parts.append(
-                    "summary="
-                    f"status:{summary.get('status')}, "
-                    f"critical:{summary.get('critical')}, "
-                    f"warnings:{summary.get('warnings')}"
-                )
+            parts.append(
+                "summary="
+                f"status:{payload.get('status')}, "
+                f"critical:{payload.get('critical')}, "
+                f"warnings:{payload.get('warnings')}"
+            )
             failed_checks = self.extract_failed_check_messages(payload, limit=3)
             if failed_checks:
                 parts.append("failed_checks=" + " | ".join(failed_checks))
@@ -727,9 +811,10 @@ class Runner:
 
     def extract_failed_check_messages(self, payload: dict[str, Any], limit: int) -> list[str]:
         messages: list[str] = []
-        for section_name, section_payload in payload.items():
-            if section_name == "summary":
-                continue
+        details = payload.get("details")
+        if not isinstance(details, dict):
+            return messages
+        for section_name, section_payload in details.items():
             if not isinstance(section_payload, dict):
                 continue
             checks = section_payload.get("checks")
@@ -747,13 +832,6 @@ class Runner:
                 if len(messages) >= limit:
                     return messages
         return messages
-
-    def filter_cnc_journal_lines(self, journal_lines: list[str]) -> list[str]:
-        pattern = re.compile(
-            r"(cnc[-_]|cnc-control|usb_mode|net_mode|shadow|led_status|webui)",
-            flags=re.IGNORECASE,
-        )
-        return [line for line in journal_lines if pattern.search(line)]
 
     def parse_json_if_possible(self, content: str) -> Any:
         text = content.strip()
@@ -791,11 +869,132 @@ class Runner:
         if leftovers:
             raise RuntimeError(f"Pliki nie zostaly usunięte: {', '.join(leftovers)}")
 
+        subdirectory_probe = self.run_webui_subdirectory_probe(label="net")
+
         return {
             "switch": switched,
             "uploaded_single": uploaded_single,
             "uploaded_batch": uploaded_batch,
             "delete": delete_response,
+            "subdirectory_probe": subdirectory_probe,
+        }
+
+    def run_webui_subdirectory_probe(self, *, label: str) -> dict[str, Any]:
+        subdir = f"{self.run_prefix}_{label}_dir"
+        nested_dir = f"{subdir}/nested"
+        self.create_remote_directory(subdir)
+        self.create_remote_directory(nested_dir)
+
+        root_listing_before = self.fetch_webui_directory_listing()
+        if subdir not in root_listing_before["dirs"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje podfolderu w katalogu glownym: "
+                f"{subdir}; dirs={root_listing_before['dirs']}"
+            )
+
+        root_file_name = f"{self.run_prefix}_{label}_subdir_root.nc"
+        root_file = self.create_local_file(
+            root_file_name,
+            [
+                "%",
+                "(subdir root file)",
+                "G90",
+                "G0 X2 Y2",
+                "M30",
+                "%",
+            ],
+        )
+        nested_file_name = f"{self.run_prefix}_{label}_subdir_nested.nc"
+        nested_file = self.create_local_file(
+            nested_file_name,
+            [
+                "%",
+                "(subdir nested file)",
+                "G90",
+                "G0 X4 Y4",
+                "M30",
+                "%",
+            ],
+        )
+
+        upload_root = self.upload_file_via_webui(root_file, remote_dir=subdir)
+        upload_nested = self.upload_file_via_webui(nested_file, remote_dir=nested_dir)
+
+        subdir_listing = self.fetch_webui_directory_listing(subdir)
+        expected_root_rel = self.join_relative_path(subdir, root_file_name)
+        if expected_root_rel not in subdir_listing["files"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje pliku w podfolderze: "
+                f"{expected_root_rel}; files={subdir_listing['files']}"
+            )
+        if nested_dir not in subdir_listing["dirs"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje zagniezdzonego podfolderu: "
+                f"{nested_dir}; dirs={subdir_listing['dirs']}"
+            )
+
+        nested_listing = self.fetch_webui_directory_listing(nested_dir)
+        expected_nested_rel = self.join_relative_path(nested_dir, nested_file_name)
+        if expected_nested_rel not in nested_listing["files"]:
+            raise RuntimeError(
+                "WebUI nie pokazuje pliku w zagniezdzonym podfolderze: "
+                f"{expected_nested_rel}; files={nested_listing['files']}"
+            )
+
+        remote_subdir_files = set(self.remote_list_files(self.resolve_remote_directory(subdir)))
+        remote_nested_files = set(self.remote_list_files(self.resolve_remote_directory(nested_dir)))
+        if root_file_name not in remote_subdir_files:
+            raise RuntimeError(
+                "Plik nie istnieje na RPi w podfolderze: "
+                f"{root_file_name}; files={sorted(remote_subdir_files)}"
+            )
+        if nested_file_name not in remote_nested_files:
+            raise RuntimeError(
+                "Plik nie istnieje na RPi w zagniezdzonym podfolderze: "
+                f"{nested_file_name}; files={sorted(remote_nested_files)}"
+            )
+
+        delete_nested = self.delete_files_via_webui([expected_nested_rel], remote_dir=nested_dir)
+        delete_root = self.delete_files_via_webui([expected_root_rel], remote_dir=subdir)
+        delete_subdir_attempt = self.delete_files_via_webui(
+            [subdir],
+            remote_dir="",
+            require_success=False,
+        )
+
+        if delete_subdir_attempt["success"]:
+            raise RuntimeError("WebUI nie powinno usuwac katalogu przez /delete-files.")
+        removed_nested = self.remove_remote_directory(nested_dir)
+        removed_subdir = self.remove_remote_directory(subdir)
+        if self.remote_path_exists(subdir) or self.remote_path_exists(nested_dir):
+            raise RuntimeError(
+                "Nie udalo sie usunac katalogow testowych: "
+                f"subdir={subdir} removed={removed_subdir}, "
+                f"nested={nested_dir} removed={removed_nested}"
+            )
+
+        root_listing_after = self.fetch_webui_directory_listing()
+        if subdir in root_listing_after["dirs"]:
+            raise RuntimeError(f"Podfolder testowy nadal widoczny po cleanup: {subdir}")
+
+        return {
+            "subdir": subdir,
+            "nested_dir": nested_dir,
+            "uploads": {
+                "subdir_file": upload_root,
+                "nested_file": upload_nested,
+            },
+            "listings": {
+                "root_before": root_listing_before,
+                "subdir": subdir_listing,
+                "nested": nested_listing,
+                "root_after": root_listing_after,
+            },
+            "deletes": {
+                "nested_file": delete_nested,
+                "subdir_file": delete_root,
+                "subdir_attempt": delete_subdir_attempt,
+            },
         }
 
     def phase_2_smb(self) -> dict[str, Any]:
@@ -1209,10 +1408,241 @@ class Runner:
 
         return details
 
+    def phase_shadow_1_watcher(self) -> dict[str, Any]:
+        if not self.shadow_enabled:
+            raise SkipPhaseError("Tryb SHADOW nieaktywny - faza watchera SHADOW pominięta.")
+
+        started = time.perf_counter()
+        before_snapshot = self.fetch_shadow_snapshot()
+
+        file_name = f"{self.run_prefix}_shadow_watch_probe.nc"
+        local_file = self.create_local_file(
+            file_name,
+            [
+                "%",
+                "(SHADOW watcher probe)",
+                "G21",
+                "G90",
+                "G0 X10 Y10",
+                "M30",
+                "%",
+            ],
+        )
+        self.upload_file_via_webui(local_file)
+        wait_result = self.wait_for_shadow_rebuild(
+            previous_run_id=before_snapshot["run_id"],
+            expected_trigger="watch",
+            timeout_seconds=self.args.switch_timeout,
+        )
+        duration = round(time.perf_counter() - started, 6)
+        self.measurements["shadow_watcher_seconds"] = duration
+
+        return {
+            "file": file_name,
+            "before": before_snapshot,
+            "after": wait_result["snapshot"],
+            "history_entry": wait_result["history_entry"],
+            "duration_seconds": duration,
+        }
+
+    def phase_shadow_2_sync_files(self) -> dict[str, Any]:
+        if not self.shadow_enabled:
+            raise SkipPhaseError("Tryb SHADOW nieaktywny - faza synchronizacji SHADOW pominięta.")
+        if not self.shadow_master_dir:
+            raise RuntimeError("Brak katalogu CNC_MASTER_DIR dla fazy synchronizacji SHADOW.")
+
+        started = time.perf_counter()
+        before_snapshot = self.fetch_shadow_snapshot()
+
+        file_names: list[str] = []
+        for index in range(1, 4):
+            file_name = f"{self.run_prefix}_shadow_sync_probe_{index:02d}.nc"
+            local_file = self.create_local_file(
+                file_name,
+                [
+                    "%",
+                    f"(SHADOW sync probe {index})",
+                    "G21",
+                    "G90",
+                    f"G1 X{index * 3} Y{index * 5} F900",
+                    "M30",
+                    "%",
+                ],
+            )
+            self.upload_file_via_webui(local_file)
+            file_names.append(file_name)
+
+        subdir = f"{self.run_prefix}_shadow_sync_dir"
+        nested_dir = f"{subdir}/nested"
+        self.create_remote_directory(subdir)
+        self.create_remote_directory(nested_dir)
+
+        subdir_file_name = f"{self.run_prefix}_shadow_sync_subdir.nc"
+        subdir_local_file = self.create_local_file(
+            subdir_file_name,
+            [
+                "%",
+                "(SHADOW sync subdir probe)",
+                "G21",
+                "G90",
+                "G1 X11 Y7 F900",
+                "M30",
+                "%",
+            ],
+        )
+        nested_file_name = f"{self.run_prefix}_shadow_sync_nested.nc"
+        nested_local_file = self.create_local_file(
+            nested_file_name,
+            [
+                "%",
+                "(SHADOW sync nested probe)",
+                "G21",
+                "G90",
+                "G1 X13 Y9 F900",
+                "M30",
+                "%",
+            ],
+        )
+        upload_subdir = self.upload_file_via_webui(subdir_local_file, remote_dir=subdir)
+        upload_nested = self.upload_file_via_webui(nested_local_file, remote_dir=nested_dir)
+
+        subdir_relative = self.join_relative_path(subdir, subdir_file_name)
+        nested_relative = self.join_relative_path(nested_dir, nested_file_name)
+        file_names.extend([subdir_relative, nested_relative])
+
+        wait_result = self.wait_for_shadow_rebuild(
+            previous_run_id=before_snapshot["run_id"],
+            expected_trigger="watch",
+            timeout_seconds=self.args.switch_timeout,
+        )
+
+        runtime_mapping = self.read_shadow_runtime_mapping()
+        expected_image_path = runtime_mapping["expected_image_path"]
+        runtime_lun_path = runtime_mapping["runtime_lun_path"]
+        if runtime_lun_path != expected_image_path:
+            raise RuntimeError(
+                "Niezgodnosc runtime LUN i aktywnego slotu SHADOW: "
+                f"runtime={runtime_lun_path}, expected={expected_image_path}"
+            )
+
+        master_checksums = self.remote_checksums_for_directory(
+            self.shadow_master_dir,
+            file_names,
+        )
+        if set(master_checksums) != set(file_names):
+            raise RuntimeError(
+                "Brak pelnych checksum dla katalogu SHADOW master: "
+                f"expected={sorted(file_names)}, got={sorted(master_checksums)}"
+            )
+
+        image_payload = self.shadow_image_checksums(expected_image_path, file_names)
+        image_checksums = image_payload["checksums"]
+        if set(image_checksums) != set(file_names):
+            raise RuntimeError(
+                "Brak pelnych checksum dla obrazu SHADOW slotu aktywnego: "
+                f"expected={sorted(file_names)}, got={sorted(image_checksums)}"
+            )
+        if image_checksums != master_checksums:
+            raise RuntimeError(
+                "Niezgodnosc synchronizacji SHADOW (master vs slot aktywny): "
+                f"master={master_checksums}, image={image_checksums}, errors={image_payload['errors']}"
+            )
+
+        duration = round(time.perf_counter() - started, 6)
+        self.measurements["shadow_sync_seconds"] = duration
+
+        return {
+            "files": file_names,
+            "directories": [subdir, nested_dir],
+            "before": before_snapshot,
+            "after": wait_result["snapshot"],
+            "history_entry": wait_result["history_entry"],
+            "runtime_mapping": runtime_mapping,
+            "uploads_nested": {
+                "subdir": upload_subdir,
+                "nested": upload_nested,
+            },
+            "checksums_master": master_checksums,
+            "checksums_active_slot": image_checksums,
+            "duration_seconds": duration,
+        }
+
+    def phase_shadow_3_gcode_runtime(self) -> dict[str, Any]:
+        if not self.shadow_enabled:
+            raise SkipPhaseError("Tryb SHADOW nieaktywny - faza G-code SHADOW pominięta.")
+
+        started = time.perf_counter()
+        before_snapshot = self.fetch_shadow_snapshot()
+
+        file_name = f"{self.run_prefix}_shadow_runtime_gcode.nc"
+        local_file = self.create_local_file(
+            file_name,
+            [
+                "%",
+                "(SHADOW runtime G-code probe)",
+                "G21",
+                "G90",
+                "G0 X0 Y0",
+                "G1 X12.5 Y8.5 F1200",
+                "M30",
+                "%",
+            ],
+        )
+        expected_sha256 = sha256_file(local_file)
+        self.upload_file_via_webui(local_file)
+
+        wait_result = self.wait_for_shadow_rebuild(
+            previous_run_id=before_snapshot["run_id"],
+            expected_trigger="watch",
+            timeout_seconds=self.args.switch_timeout,
+        )
+
+        runtime_mapping = self.read_shadow_runtime_mapping()
+        expected_image_path = runtime_mapping["expected_image_path"]
+        runtime_lun_path = runtime_mapping["runtime_lun_path"]
+        if runtime_lun_path != expected_image_path:
+            raise RuntimeError(
+                "Plik G-code nie jest eksponowany z aktywnego slotu SHADOW: "
+                f"runtime={runtime_lun_path}, expected={expected_image_path}"
+            )
+
+        image_payload = self.shadow_image_checksums(runtime_lun_path, [file_name])
+        image_checksums = image_payload["checksums"]
+        observed_sha256 = image_checksums.get(file_name)
+        if observed_sha256 != expected_sha256:
+            raise RuntimeError(
+                "Niezgodnosc G-code w runtime LUN SHADOW: "
+                f"expected={expected_sha256}, observed={observed_sha256}, "
+                f"errors={image_payload['errors']}"
+            )
+
+        host_read: dict[str, Any] = {
+            "enabled": bool(self.args.usb_host_mount),
+            "reason": "usb_host_mount_not_set" if not self.args.usb_host_mount else "",
+        }
+        if self.args.usb_host_mount:
+            host_read = self.wait_for_usb_host_shadow_file(file_name, expected_sha256)
+
+        duration = round(time.perf_counter() - started, 6)
+        self.measurements["shadow_gcode_runtime_seconds"] = duration
+
+        return {
+            "file": file_name,
+            "expected_sha256": expected_sha256,
+            "observed_sha256": observed_sha256,
+            "before": before_snapshot,
+            "after": wait_result["snapshot"],
+            "history_entry": wait_result["history_entry"],
+            "runtime_mapping": runtime_mapping,
+            "usb_host_read": host_read,
+            "duration_seconds": duration,
+        }
+
     def phase_6_cleanup(self) -> dict[str, Any]:
         errors: list[str] = []
         details: dict[str, Any] = {
             "leftover_webui_files_before": sorted(self.created_files),
+            "leftover_webui_dirs_before": sorted(self.created_dirs),
             "leftover_smb_files_before": sorted(self.smb_created_files),
             "shadow_enabled": self.shadow_enabled,
         }
@@ -1224,9 +1654,16 @@ class Runner:
                 errors.append(f"switch_net: {exc}")
 
         if self.preflight_ok and self.created_files:
-            names = sorted(self.created_files)
             try:
-                self.delete_files_via_webui(names)
+                grouped: dict[str, list[str]] = {}
+                for relative_path in sorted(self.created_files):
+                    relative_obj = PurePosixPath(relative_path)
+                    parent = str(relative_obj.parent)
+                    if parent == ".":
+                        parent = ""
+                    grouped.setdefault(parent, []).append(relative_path)
+                for parent, names in sorted(grouped.items(), key=lambda item: item[0]):
+                    self.delete_files_via_webui(names, remote_dir=parent)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"delete_webui: {exc}")
 
@@ -1240,6 +1677,17 @@ class Runner:
                 self.created_files.clear()
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"delete_ssh: {exc}")
+
+        if self.preflight_ok and self.created_dirs:
+            try:
+                for directory in sorted(
+                    self.created_dirs,
+                    key=lambda value: len(PurePosixPath(value).parts),
+                    reverse=True,
+                ):
+                    self.remove_remote_directory(directory)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"delete_dirs_ssh: {exc}")
 
         if self.preflight_ok and self.smb_created_files and self.args.smb_share:
             try:
@@ -1257,6 +1705,7 @@ class Runner:
                 errors.append(f"delete_smb: {exc}")
 
         details["leftover_webui_files_after"] = sorted(self.created_files)
+        details["leftover_webui_dirs_after"] = sorted(self.created_dirs)
         details["leftover_smb_files_after"] = sorted(self.smb_created_files)
 
         if errors:
@@ -1372,6 +1821,111 @@ class Runner:
             raise RuntimeError("Nieprawidłowa odpowiedź JSON z /api/status.")
         return payload
 
+    def fetch_shadow_history(self, limit: int = 20) -> list[dict[str, Any]]:
+        self.ensure_requests_session()
+        assert self.session is not None
+
+        response = self.session.get(
+            urljoin(self.webui_url + "/", "api/shadow/history"),
+            params={"limit": str(limit)},
+            timeout=self.args.http_timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Nieprawidłowa odpowiedź JSON z /api/shadow/history.")
+        history = payload.get("history")
+        if not isinstance(history, list):
+            raise RuntimeError("Brak listy history w odpowiedzi /api/shadow/history.")
+        return [entry for entry in history if isinstance(entry, dict)]
+
+    def fetch_shadow_snapshot(self) -> dict[str, Any]:
+        payload = self.fetch_api_status()
+        mode = str(payload.get("mode") or "").upper()
+        if mode != "SHADOW":
+            raise RuntimeError(f"Oczekiwano trybu SHADOW, otrzymano: {mode or 'UNKNOWN'}")
+        shadow_state = payload.get("shadow_state")
+        if not isinstance(shadow_state, dict):
+            raise RuntimeError("Brak shadow_state w odpowiedzi /api/status.")
+        try:
+            run_id = int(shadow_state.get("run_id", 0))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Nieprawidłowy run_id w shadow_state: {shadow_state.get('run_id')}"
+            ) from exc
+        fsm_state = str(shadow_state.get("fsm_state") or "UNKNOWN").upper()
+        return {
+            "mode": mode,
+            "run_id": run_id,
+            "fsm_state": fsm_state,
+            "shadow_state": shadow_state,
+            "switching": bool(payload.get("switching")),
+            "api_status": payload,
+        }
+
+    def wait_for_shadow_rebuild(
+        self,
+        *,
+        previous_run_id: int,
+        expected_trigger: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_seconds
+        poll_interval = 1.5
+        expected_trigger_norm = expected_trigger.strip().casefold()
+        last_snapshot: dict[str, Any] | None = None
+        last_history: list[dict[str, Any]] = []
+
+        while time.monotonic() < deadline:
+            snapshot = self.fetch_shadow_snapshot()
+            last_snapshot = snapshot
+            try:
+                history = self.fetch_shadow_history(limit=20)
+            except Exception:
+                history = []
+            last_history = history
+
+            candidate_entry: dict[str, Any] | None = None
+            candidate_run_id = -1
+            for entry in history:
+                trigger = str(entry.get("trigger") or "").casefold()
+                if trigger != expected_trigger_norm:
+                    continue
+                try:
+                    run_id = int(entry.get("run_id", -1))
+                except (TypeError, ValueError):
+                    continue
+                if run_id <= previous_run_id:
+                    continue
+                if run_id > candidate_run_id:
+                    candidate_run_id = run_id
+                    candidate_entry = entry
+
+            if candidate_entry is not None:
+                entry_result = str(candidate_entry.get("result") or "").casefold()
+                if entry_result != "ok":
+                    raise RuntimeError(
+                        "SHADOW rebuild zakonczony bledem: "
+                        f"trigger={expected_trigger}, entry={candidate_entry}"
+                    )
+                if (
+                    snapshot["run_id"] >= candidate_run_id
+                    and snapshot["fsm_state"] == "READY"
+                ):
+                    return {
+                        "snapshot": snapshot,
+                        "history_entry": candidate_entry,
+                    }
+
+            time.sleep(poll_interval)
+
+        history_preview = [entry for entry in last_history[:3]]
+        raise RuntimeError(
+            "Timeout oczekiwania na rebuild SHADOW "
+            f"(trigger={expected_trigger}, previous_run_id={previous_run_id}, "
+            f"last_snapshot={last_snapshot}, history_preview={history_preview})"
+        )
+
     def extract_redirect_message(self, response: Any) -> str:
         location = response.headers.get("Location", "")
         if not location:
@@ -1408,6 +1962,7 @@ class Runner:
         assert self.session is not None
 
         endpoint = "net" if target_mode == "NET" else "usb"
+        self.log_console(f"MODE SWITCH: request {target_mode} via /{endpoint}")
         started = time.perf_counter()
 
         response = self.session.post(
@@ -1424,6 +1979,7 @@ class Runner:
         redirect_message = self.extract_redirect_message(response)
         api_status = self.wait_for_mode(target_mode, timeout_seconds=self.args.switch_timeout)
         duration = round(time.perf_counter() - started, 6)
+        self.log_console(f"MODE SWITCH: {target_mode} ready in {duration:.3f}s")
 
         return {
             "target_mode": target_mode,
@@ -1445,19 +2001,120 @@ class Runner:
             pass
         self.switch_mode("NET")
 
+    def normalize_relative_dir(self, directory: str | None) -> str:
+        if not directory:
+            return ""
+        raw = str(directory).strip()
+        if not raw or raw == ".":
+            return ""
+        if raw.startswith("/"):
+            raise RuntimeError(f"Nieprawidlowa sciezka wzgledna: {directory!r}")
+        normalized = str(PurePosixPath(raw)).strip().strip("/")
+        if normalized in {"", "."}:
+            return ""
+        if normalized.startswith("..") or "/../" in f"/{normalized}/":
+            raise RuntimeError(f"Nieprawidlowa sciezka wzgledna: {directory!r}")
+        return normalized
+
+    def join_relative_path(self, directory: str | None, name: str) -> str:
+        base = self.normalize_relative_dir(directory)
+        file_name = str(PurePosixPath(name).name)
+        if base:
+            return f"{base}/{file_name}"
+        return file_name
+
+    def resolve_remote_directory(self, directory: str | None) -> str:
+        if not self.upload_dir:
+            raise RuntimeError("Brak upload_dir do obslugi podfolderow.")
+        normalized = self.normalize_relative_dir(directory)
+        base = PurePosixPath(self.upload_dir)
+        if not normalized:
+            return str(base)
+        return str(base / PurePosixPath(normalized))
+
+    def create_remote_directory(self, directory: str) -> dict[str, Any]:
+        normalized = self.normalize_relative_dir(directory)
+        if not normalized:
+            raise RuntimeError("Brak nazwy katalogu do utworzenia.")
+        remote_path = self.resolve_remote_directory(normalized)
+        result = self.ssh_exec(f"mkdir -p -- {shlex.quote(remote_path)}", check=True)
+        self.created_dirs.add(normalized)
+        return {
+            "directory": normalized,
+            "remote_path": remote_path,
+            "stdout": result["stdout"],
+        }
+
+    def remove_remote_directory(self, directory: str) -> bool:
+        normalized = self.normalize_relative_dir(directory)
+        if not normalized:
+            return False
+        remote_path = self.resolve_remote_directory(normalized)
+        result = self.ssh_exec(
+            f"if [ -d {shlex.quote(remote_path)} ]; then rmdir -- {shlex.quote(remote_path)}; fi",
+            check=False,
+        )
+        removed = result["exit_status"] == 0 and not self.remote_path_exists(normalized)
+        if removed:
+            self.created_dirs.discard(normalized)
+        return removed
+
+    def remote_path_exists(self, relative_path: str) -> bool:
+        target_path = self.resolve_remote_directory(relative_path)
+        result = self.ssh_exec(f"test -e {shlex.quote(target_path)}", check=False)
+        return result["exit_status"] == 0
+
+    def fetch_webui_directory_listing(self, directory: str | None = None) -> dict[str, Any]:
+        self.ensure_requests_session()
+        assert self.session is not None
+
+        params: dict[str, str] = {}
+        normalized = self.normalize_relative_dir(directory)
+        if normalized:
+            params["dir"] = normalized
+        response = self.session.get(
+            urljoin(self.webui_url + "/", ""),
+            params=params,
+            timeout=self.args.http_timeout,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+
+        parser = WebUiDirectoryParser()
+        parser.feed(response.text)
+        parser.close()
+
+        return {
+            "directory": normalized,
+            "http_status": response.status_code,
+            "files": sorted(set(parser.file_values), key=str.casefold),
+            "dirs": sorted(set(parser.dir_values), key=str.casefold),
+            "url": response.url,
+        }
+
     def create_local_file(self, name: str, lines: list[str]) -> Path:
         path = self.local_temp_dir / name
         content = "\n".join(lines) + "\n"
         path.write_text(content, encoding="utf-8")
         return path
 
-    def upload_file_via_webui(self, local_file: Path) -> dict[str, Any]:
+    def upload_file_via_webui(
+        self,
+        local_file: Path,
+        *,
+        remote_dir: str | None = None,
+    ) -> dict[str, Any]:
         self.ensure_requests_session()
         assert self.session is not None
 
+        normalized_dir = self.normalize_relative_dir(remote_dir)
+        form_data: dict[str, str] = {}
+        if normalized_dir:
+            form_data["dir"] = normalized_dir
         with local_file.open("rb") as handle:
             response = self.session.post(
                 urljoin(self.webui_url + "/", "upload"),
+                data=form_data,
                 files={"file": (local_file.name, handle)},
                 timeout=self.args.http_timeout,
                 allow_redirects=False,
@@ -1469,15 +2126,25 @@ class Runner:
             )
 
         message = self.extract_redirect_message(response)
-        self.created_files.add(local_file.name)
+        relative_path = self.join_relative_path(normalized_dir, local_file.name)
+        self.created_files.add(relative_path)
         return {
             "file": local_file.name,
+            "relative_path": relative_path,
+            "directory": normalized_dir,
             "http_status": response.status_code,
             "redirect_message": message,
         }
 
-    def upload_files_via_webui(self, count: int, label: str) -> list[str]:
+    def upload_files_via_webui(
+        self,
+        count: int,
+        label: str,
+        *,
+        remote_dir: str | None = None,
+    ) -> list[str]:
         uploaded: list[str] = []
+        normalized_dir = self.normalize_relative_dir(remote_dir)
         for index in range(1, count + 1):
             file_name = f"{self.run_prefix}_{label}_{index:02d}.nc"
             local_file = self.create_local_file(
@@ -1491,18 +2158,27 @@ class Runner:
                     "%",
                 ],
             )
-            self.upload_file_via_webui(local_file)
+            self.upload_file_via_webui(local_file, remote_dir=normalized_dir)
             uploaded.append(file_name)
         return uploaded
 
-    def delete_files_via_webui(self, file_names: list[str]) -> dict[str, Any]:
+    def delete_files_via_webui(
+        self,
+        file_names: list[str],
+        *,
+        remote_dir: str | None = None,
+        require_success: bool = True,
+    ) -> dict[str, Any]:
         if not file_names:
             return {"deleted": []}
 
         self.ensure_requests_session()
         assert self.session is not None
 
+        normalized_dir = self.normalize_relative_dir(remote_dir)
         payload: list[tuple[str, str]] = [("confirm_delete", "yes")]
+        if normalized_dir:
+            payload.append(("dir", normalized_dir))
         payload.extend(("files", name) for name in file_names)
 
         response = self.session.post(
@@ -1518,14 +2194,18 @@ class Runner:
 
         message = self.extract_redirect_message(response)
         lowered = message.casefold()
-        if "nie udalo" in lowered or "bled" in lowered:
+        success = "nie udalo" not in lowered and "bled" not in lowered
+        if require_success and not success:
             raise RuntimeError(f"WebUI delete zwrócił błąd: {message}")
 
-        for name in file_names:
-            self.created_files.discard(name)
+        if success:
+            for name in file_names:
+                self.created_files.discard(name)
 
         return {
             "deleted": sorted(file_names),
+            "directory": normalized_dir,
+            "success": success,
             "http_status": response.status_code,
             "redirect_message": message,
         }
@@ -1554,7 +2234,14 @@ class Runner:
         return [str(item) for item in parsed]
 
     def remote_checksums(self, names: list[str]) -> dict[str, str]:
-        if not self.upload_dir:
+        return self.remote_checksums_for_directory(self.upload_dir, names)
+
+    def remote_checksums_for_directory(
+        self,
+        directory: str | None,
+        names: list[str],
+    ) -> dict[str, str]:
+        if not directory:
             return {}
         wanted_literal = repr(sorted(names))
         script = (
@@ -1562,17 +2249,20 @@ class Runner:
             "import hashlib\n"
             "import json\n"
             "from pathlib import Path\n"
-            f"root = Path({self.upload_dir!r})\n"
-            f"wanted = set({wanted_literal})\n"
+            f"root = Path({directory!r})\n"
+            f"wanted = list({wanted_literal})\n"
             "payload = {}\n"
             "if root.is_dir():\n"
-            "    for path in sorted(root.iterdir(), key=lambda p: p.name.casefold()):\n"
-            "        if not path.is_file():\n"
+            "    for relative in wanted:\n"
+            "        candidate = (root / relative).resolve()\n"
+            "        try:\n"
+            "            candidate.relative_to(root.resolve())\n"
+            "        except ValueError:\n"
             "            continue\n"
-            "        if path.name not in wanted:\n"
+            "        if not candidate.is_file():\n"
             "            continue\n"
-            "        digest = hashlib.sha256(path.read_bytes()).hexdigest()\n"
-            "        payload[path.name] = digest\n"
+            "        digest = hashlib.sha256(candidate.read_bytes()).hexdigest()\n"
+            "        payload[relative] = digest\n"
             "print(json.dumps(payload, ensure_ascii=True, sort_keys=True))\n"
             "PY"
         )
@@ -1581,6 +2271,168 @@ class Runner:
         if not isinstance(parsed, dict):
             raise RuntimeError("Nieprawidłowy JSON checksum z RPi.")
         return {str(k): str(v) for k, v in parsed.items()}
+
+    def read_shadow_runtime_mapping(self) -> dict[str, str]:
+        env_payload = self.remote_env or self.read_remote_env()
+        slot_file = env_payload.get("CNC_ACTIVE_SLOT_FILE") or "/var/lib/cnc-control/shadow_active_slot.state"
+        image_a = env_payload.get("CNC_USB_IMG_A") or "/var/lib/cnc-control/cnc_usb_a.img"
+        image_b = env_payload.get("CNC_USB_IMG_B") or "/var/lib/cnc-control/cnc_usb_b.img"
+
+        script = (
+            "python3 - <<'PY'\n"
+            "import json\n"
+            "from pathlib import Path\n"
+            f"slot_file = Path({slot_file!r})\n"
+            f"image_a = {image_a!r}\n"
+            f"image_b = {image_b!r}\n"
+            "runtime_file = Path('/sys/module/g_mass_storage/parameters/file')\n"
+            "slot_raw = ''\n"
+            "if slot_file.exists():\n"
+            "    slot_raw = slot_file.read_text(encoding='utf-8', errors='replace').strip()\n"
+            "slot = slot_raw.upper()\n"
+            "if slot == 'A':\n"
+            "    expected = image_a\n"
+            "elif slot == 'B':\n"
+            "    expected = image_b\n"
+            "else:\n"
+            "    expected = ''\n"
+            "runtime = ''\n"
+            "if runtime_file.exists():\n"
+            "    runtime = runtime_file.read_text(encoding='utf-8', errors='replace').strip()\n"
+            "print(json.dumps({\n"
+            "    'slot_file': str(slot_file),\n"
+            "    'active_slot': slot,\n"
+            "    'image_a': image_a,\n"
+            "    'image_b': image_b,\n"
+            "    'expected_image_path': expected,\n"
+            "    'runtime_lun_path': runtime,\n"
+            "}, ensure_ascii=True))\n"
+            "PY"
+        )
+        result = self.ssh_exec(script, check=True)
+        payload = json.loads(result["stdout"] or "{}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Nieprawidlowy JSON mapowania runtime SHADOW.")
+        active_slot = str(payload.get("active_slot") or "")
+        expected_path = str(payload.get("expected_image_path") or "")
+        runtime_path = str(payload.get("runtime_lun_path") or "")
+        if active_slot not in {"A", "B"}:
+            raise RuntimeError(f"Nieprawidlowa wartosc aktywnego slotu SHADOW: {active_slot!r}")
+        if not expected_path:
+            raise RuntimeError("Brak expected_image_path dla aktywnego slotu SHADOW.")
+        if not runtime_path:
+            raise RuntimeError("Brak runtime_lun_path dla SHADOW.")
+        return {
+            "slot_file": str(payload.get("slot_file") or slot_file),
+            "active_slot": active_slot,
+            "image_a": str(payload.get("image_a") or image_a),
+            "image_b": str(payload.get("image_b") or image_b),
+            "expected_image_path": expected_path,
+            "runtime_lun_path": runtime_path,
+        }
+
+    def shadow_image_checksums(self, image_path: str, names: list[str]) -> dict[str, dict[str, str]]:
+        files_literal = repr(sorted(names))
+        script = (
+            "python3 - <<'PY'\n"
+            "import hashlib\n"
+            "import json\n"
+            "import os\n"
+            "import subprocess\n"
+            "import tempfile\n"
+            f"image_path = {image_path!r}\n"
+            f"names = {files_literal}\n"
+            "checksums = {}\n"
+            "errors = {}\n"
+            "for name in names:\n"
+            "    temp_path = ''\n"
+            "    try:\n"
+            "        with tempfile.NamedTemporaryFile(prefix='cnc-shadow-', delete=False) as tmp:\n"
+            "            temp_path = tmp.name\n"
+            "        result = subprocess.run(\n"
+            "            ['mcopy', '-n', '-i', image_path, f'::{name}', temp_path],\n"
+            "            capture_output=True,\n"
+            "            text=True,\n"
+            "            check=False,\n"
+            "        )\n"
+            "        if result.returncode != 0:\n"
+            "            detail = (result.stderr or result.stdout or '').strip()\n"
+            "            errors[name] = detail or f'mcopy rc={result.returncode}'\n"
+            "            continue\n"
+            "        digest = hashlib.sha256()\n"
+            "        with open(temp_path, 'rb') as handle:\n"
+            "            while True:\n"
+            "                chunk = handle.read(1024 * 1024)\n"
+            "                if not chunk:\n"
+            "                    break\n"
+            "                digest.update(chunk)\n"
+            "        checksums[name] = digest.hexdigest()\n"
+            "    finally:\n"
+            "        if temp_path and os.path.exists(temp_path):\n"
+            "            os.unlink(temp_path)\n"
+            "print(json.dumps({'checksums': checksums, 'errors': errors}, ensure_ascii=True, sort_keys=True))\n"
+            "PY"
+        )
+        result = self.ssh_exec(script, check=True)
+        payload = json.loads(result["stdout"] or "{}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Nieprawidlowy JSON checksum obrazu SHADOW.")
+        raw_checksums = payload.get("checksums")
+        raw_errors = payload.get("errors")
+        if not isinstance(raw_checksums, dict) or not isinstance(raw_errors, dict):
+            raise RuntimeError("Brak map checksums/errors w odpowiedzi checksum obrazu SHADOW.")
+        checksums = {str(name): str(value) for name, value in raw_checksums.items()}
+        errors = {str(name): str(value) for name, value in raw_errors.items()}
+        return {
+            "checksums": checksums,
+            "errors": errors,
+        }
+
+    def wait_for_usb_host_shadow_file(self, file_name: str, expected_sha256: str) -> dict[str, Any]:
+        if not self.args.usb_host_mount:
+            raise RuntimeError("Brak --usb-host-mount dla testu runtime SHADOW.")
+
+        host_mount = Path(self.args.usb_host_mount).expanduser()
+        if not host_mount.exists() or not host_mount.is_dir():
+            raise RuntimeError(
+                f"Nieprawidlowy --usb-host-mount: {host_mount} (wymagany istniejacy katalog)."
+            )
+
+        probe_path = host_mount / file_name
+        started = time.monotonic()
+        deadline = started + self.args.usb_host_read_timeout
+        while time.monotonic() < deadline:
+            if probe_path.is_file():
+                break
+            time.sleep(0.5)
+
+        if not probe_path.is_file():
+            preview_entries = sorted(
+                [entry.name for entry in host_mount.iterdir() if not entry.name.startswith(".")],
+                key=str.casefold,
+            )[:20]
+            raise RuntimeError(
+                "Plik G-code SHADOW nie jest widoczny po stronie hosta USB "
+                f"w czasie {self.args.usb_host_read_timeout}s: {probe_path}; "
+                f"entries_preview={preview_entries}"
+            )
+
+        observed_sha256 = sha256_file(probe_path)
+        if observed_sha256 != expected_sha256:
+            raise RuntimeError(
+                "Niezgodnosc SHA256 dla G-code SHADOW po stronie hosta USB: "
+                f"expected={expected_sha256}, observed={observed_sha256}, file={probe_path}"
+            )
+
+        return {
+            "enabled": True,
+            "host_mount": str(host_mount),
+            "file": file_name,
+            "path": str(probe_path),
+            "expected_sha256": expected_sha256,
+            "observed_sha256": observed_sha256,
+            "wait_seconds": round(time.monotonic() - started, 6),
+        }
 
     def run_sync_probe(
         self,
@@ -1684,6 +2536,7 @@ def parse_args() -> argparse.Namespace:
             "usb",
             "sync",
             "perf",
+            "shadow",
             "ssh",
         ),
         default="all",

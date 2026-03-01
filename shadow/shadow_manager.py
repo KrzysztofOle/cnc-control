@@ -19,13 +19,13 @@ from shadow.watcher_service import WatcherService
 
 class ShadowManager:
     _LED_MODE_BY_STATE = {
-        "IDLE": "UPLOAD",
-        "READY": "UPLOAD",
-        "CHANGE_DETECTED": "SHADOW_PENDING",
-        "BUILD_SLOT_A": "USB",
-        "BUILD_SLOT_B": "USB",
-        "EXPORT_STOP": "USB",
-        "EXPORT_START": "USB",
+        "IDLE": "SHADOW_READY",
+        "READY": "SHADOW_READY",
+        "CHANGE_DETECTED": "SHADOW_SYNC",
+        "BUILD_SLOT_A": "SHADOW_SYNC",
+        "BUILD_SLOT_B": "SHADOW_SYNC",
+        "EXPORT_STOP": "SHADOW_SYNC",
+        "EXPORT_START": "SHADOW_SYNC",
         "ERROR": "ERROR",
     }
 

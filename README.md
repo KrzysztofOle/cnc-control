@@ -23,12 +23,11 @@ Projekt jest rozwijany hobbystycznie, z naciskiem na **praktyczne zastosowanie w
 
 > ⚠️ Projekt **nie ingeruje** w logikę PLC sterownika RichAuto – pełni rolę systemu wspomagającego.
 
-## 📣 Status trybów pracy
+## 📣 Tryb pracy (wyłącznie SHADOW)
 
-- `SHADOW` to aktualnie obowiązujący i rekomendowany tryb pracy.
-- Przełączanie `NET/USB` (`net_mode.sh` / `usb_mode.sh`) ma status **legacy**.
-- Tryb `NET/USB` jest stopniowo wycofywany i pozostaje tylko dla kompatybilności wstecznej.
-- Specyfikacja trybu docelowego: `docs/SHADOW_MODE.md`.
+- Projekt działa wyłącznie w trybie `SHADOW`.
+- Przeplyw opiera sie na katalogu `CNC_MASTER_DIR` oraz slotach obrazow USB (`CNC_USB_IMG_A` / `CNC_USB_IMG_B`).
+- Szczegolowa specyfikacja: `docs/SHADOW_MODE.md`.
 
 ---
 
@@ -58,6 +57,7 @@ Projekt jest rozwijany hobbystycznie, z naciskiem na **praktyczne zastosowanie w
 - 🐍 Python 3.9+
 - 📦 pip / venv
 - 🔧 Git
+- 🧰 Pakiety SHADOW: `dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`
 
 Opcjonalnie:
 - Samba / FTP
@@ -67,11 +67,8 @@ Opcjonalnie:
 
 ## 🚀 Instalacja
 
-```bash
-git clone https://github.com/<twoj-user>/cnc-control.git
-cd cnc-control
-python3 tools/bootstrap_env.py --target rpi
-```
+Preferowana instalacja RPi to bootstrap systemowy (`tools/bootstrap_cnc.sh`).
+Tryb `bootstrap_env.py` jest przeznaczony glownie do przygotowania samego Python venv.
 
 Dla komputera developerskiego:
 
@@ -110,11 +107,32 @@ Opcjonalnie możesz jawnie wskazać użytkownika instalacji:
 CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 ```
 
+### Instalacja z innej gałęzi
+
+```bash
+cd ~
+wget https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+./bootstrap_cnc.sh --branch <branch-name>
+```
+
+Priorytet wyboru gałęzi:
+- `--branch <branch-name>`
+- `CNC_GIT_BRANCH=<branch-name>`
+- domyślnie `main`
+
 Skrypt automatycznie:
 - zaktualizuje system (`apt update/upgrade`),
-- utworzy `.venv` i zainstaluje zależności z `pyproject.toml` (z próbą dodatku `rpi-ws281x`),
+- zainstaluje pakiety SHADOW (`dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`),
+- utworzy `.venv` i wykona `pip install --editable ".[rpi]"`,
 - pobierze/odświeży repo `cnc-control` po HTTPS,
-- uruchomi `setup_system.sh`, `setup_commands.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+- uruchomi `setup_system.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+
+Po pierwszej instalacji wykonaj reboot:
+
+```bash
+sudo reboot
+```
 
 Opcjonalne nadpisanie użytkownika i katalogu repo:
 
@@ -152,24 +170,69 @@ Opis taga jest wyświetlany w WebUI.
 
 ---
 
-## ⌨️ Komendy skrótowe (CLI)
-
-Dla kompatybilności wstecznej nadal dostępne są komendy (`usb_mode`, `net_mode`, `status`, `cnc_selftest`):
+## ⌨️ Narzędzia CLI (diagnostyka)
 
 ```bash
-chmod +x tools/setup_commands.sh
-./tools/setup_commands.sh
+./status.sh
+./tools/shadow_usb_export.sh
+./tools/cnc_selftest.sh
+./tools/cnc_selftest.sh --verbose
+./tools/cnc_selftest.sh --json
+./tools/cnc_install_validation.sh
+./tools/cnc_install_validation.sh --json
+./tools/cnc_install_validation.sh --strict
 ```
 
-Skrypt tworzy linki do `usb_mode.sh`, `net_mode.sh`, `status.sh`, `tools/cnc_selftest.sh` i w razie potrzeby dodaje `~/.local/bin` do `PATH` (w `~/.bashrc` i `~/.zshrc`). Dla nowych wdrożeń używaj trybu `SHADOW`.
+## 🧪 Selftest v2 (Python, SHADOW-only)
 
-## Diagnostyka
+### 1) Architektura
 
-```bash
-cnc_selftest
-cnc_selftest --verbose
-cnc_selftest --json
+- `cnc-selftest` jest entrypointem Python: `cnc_control.selftest.cli`.
+- `tools/cnc_selftest.sh` jest wyłącznie cienkim wrapperem CLI do modułu Python.
+- Parser `journalctl` ma jedną implementację (`cnc_control.selftest.journal`) i nie jest duplikowany w runnerze integracyjnym.
+- Klasyfikacja nie używa heurystyk opartych o hostname.
+
+### 2) Kontrakt JSON
+
+Przykładowy format:
+
+```json
+{
+  "status": "OK|FAILED",
+  "critical": 0,
+  "warnings": 2,
+  "system_noise": 8,
+  "details": {}
+}
 ```
+
+Znaczenie pól:
+
+| Pole | Znaczenie |
+|---|---|
+| `critical` | Naruszenie specyfikacji SHADOW (blokuje CI). |
+| `warnings` | Niekrytyczne problemy diagnostyczne. |
+| `system_noise` | Błędy systemowe niezwiązane bezpośrednio z CNC. |
+| `status` | `FAILED` tylko gdy `critical > 0`. |
+
+### 3) Exit code
+
+- exit `0` -> `critical == 0`
+- exit `1` -> `critical > 0`
+- `warnings` i `system_noise` nie blokują CI
+
+## tools/cnc_install_validation.sh
+
+Walidator instalacji systemowej SHADOW-only (tryb tylko do odczytu, bez modyfikacji systemu).
+
+Tryby:
+- domyslny: czytelny raport tekstowy,
+- `--json`: raport JSON,
+- `--strict`: FAIL, jesli wystapi WARN.
+
+Exit code:
+- `0` = PASS,
+- `1` = FAIL.
 
 ---
 
@@ -205,8 +268,8 @@ Mapowanie trybów:
 | Tryb | Kolor | Zachowanie |
 |---|---|---|
 | `BOOT` | żółty `(255, 180, 0)` | stały |
-| `USB` | czerwony `(255, 0, 0)` | stały |
-| `UPLOAD` | zielony `(0, 255, 0)` | stały |
+| `SHADOW_READY` | zielony `(0, 255, 0)` | stały |
+| `SHADOW_SYNC` | niebieski `(0, 0, 255)` | stały |
 | `AP` | niebieski `(0, 0, 255)` | mruganie `1 Hz` |
 | `ERROR` | czerwony `(255, 0, 0)` | szybkie mruganie `3 Hz` |
 | `IDLE` | biały przygaszony `(76, 76, 76)` | stały |
@@ -236,9 +299,34 @@ Minimalny sudoers (plik `/etc/sudoers.d/cnc-wifi`):
 ```bash
 andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli *
 andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl stop cnc-ap.service
+andrzej ALL=(root) NOPASSWD: /usr/bin/hostnamectl set-hostname *
+andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl restart avahi-daemon
 ```
 
 Skrypt pomocniczy używany przez WebUI: `tools/wifi_control.sh`.
+
+### Zmiana nazwy Raspberry Pi z WebUI
+
+W zakladce `System` dostepna jest sekcja `Nazwa Raspberry Pi`.
+
+- pole akceptuje nazwe przyjazna operatorowi (np. `CNC_USB`),
+- WebUI zapisuje:
+  - `pretty hostname` bez zmian (`CNC_USB`),
+  - `static hostname` w formacie Linux/mDNS (`cnc-usb`),
+- po zmianie nazwy pokazany jest aktualny adres `mDNS` (np. `cnc-usb.local`).
+
+### ZeroTier z WebUI
+
+W zakladce `System` panel `ZeroTier` umozliwia:
+- wlaczanie/wylaczanie uslugi (`ON/OFF`),
+- dodanie uslugi ZeroTier przez przycisk `Dodaj usluge`,
+- opcjonalne podanie `Network ID` (16 znakow hex), aby od razu wykonac `join`.
+
+Aby instalacja dzialala z poziomu WebUI, dodaj uprawnienie sudo dla skryptu:
+
+```bash
+andrzej ALL=(root) NOPASSWD: /usr/bin/bash /home/andrzej/cnc-control/tools/setup_zerotier.sh *
+```
 
 ### Blokada trybu AP
 
@@ -274,7 +362,7 @@ Konfiguracja jest centralnie zarzadzana przez plik:
 /etc/cnc-control/cnc-control.env
 ```
 
-Plik ten jest wczytywany przez systemd (`EnvironmentFile=`), logikę SHADOW/WebUI oraz skrypty kompatybilności (`net_mode.sh`, `usb_mode.sh`). Brak pliku lub brak wymaganych zmiennych powoduje jawny blad.
+Plik ten jest wczytywany przez systemd (`EnvironmentFile=`), logike SHADOW/WebUI oraz narzedzia diagnostyczne. Brak pliku lub brak wymaganych zmiennych powoduje jawny blad.
 
 Szybki start:
 
@@ -284,28 +372,34 @@ sudo cp config/cnc-control.env.example /etc/cnc-control/cnc-control.env
 sudo nano /etc/cnc-control/cnc-control.env
 ```
 
-Wymagane zmienne (brak domyslnych wartosci):
+Wymagane zmienne dla trybu SHADOW-only:
 
 | Zmienna | Opis | Domyslna wartosc | Uzycie |
 |---|---|---|---|
-| `CNC_USB_IMG` | Sciezka do obrazu USB Mass Storage | brak (wymagane) | `net_mode.sh`, `usb_mode.sh` (legacy) |
-| `CNC_MOUNT_POINT` | Punkt montowania obrazu (upload G-code) | brak (wymagane) | `net_mode.sh`, `usb_mode.sh` (legacy) |
-| `CNC_UPLOAD_DIR` | Katalog uploadu z WebUI | brak (wymagane) | `webui/app.py` |
+| `CNC_SHADOW_ENABLED` | Flaga trybu SHADOW (ustaw `true`) | `true` | `webui/app.py`, `tools/cnc_selftest.sh` |
+| `CNC_MASTER_DIR` | Katalog roboczy SHADOW (zrodlo plikow) | `/var/lib/cnc-control/master` | `shadow/watcher_service.py`, `shadow/rebuild_engine.py` |
+| `CNC_USB_IMG_A` | Sciezka obrazu USB dla slotu A | `/var/lib/cnc-control/cnc_usb_a.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_USB_IMG_B` | Sciezka obrazu USB dla slotu B | `/var/lib/cnc-control/cnc_usb_b.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
 
 Pozostale zmienne (opcjonalne):
 
 | Zmienna | Opis | Domyslna wartosc | Uzycie |
 |---|---|---|---|
-| `CNC_NET_MODE_SCRIPT` | Sciezka do skryptu trybu sieciowego (legacy) | `<repo>/net_mode.sh` | `webui/app.py` |
-| `CNC_USB_MODE_SCRIPT` | Sciezka do skryptu trybu USB (legacy) | `<repo>/usb_mode.sh` | `webui/app.py` |
-| `CNC_CONTROL_REPO` | Sciezka do repo (dla `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
+| `CNC_CONTROL_REPO` | Sciezka do repo (dla `git pull`) | `/home/cnc/cnc-control` | `webui/app.py` |
 | `CNC_WEBUI_LOG` | Sciezka do pliku logu webui | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | Nazwa unita systemd dla webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Zakres czasu dla `journalctl` (np. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
 | `CNC_AP_BLOCK_FLAG` | Sciezka pliku tymczasowej blokady AP | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
 | `CNC_AP_ENABLED` | Globalny przelacznik AP (`true`/`false`) | `false` | `webui/app.py` |
-| `CNC_USB_LABEL` | Etykieta woluminu FAT widoczna na hoście USB (max 11 znakow) | `CNC_USB` | `net_mode.sh`, `usb_mode.sh`, `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
-| `CNC_USB_MOUNT` | Legacy: punkt montowania USB | brak | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_USB_LABEL` | Etykieta woluminu FAT widoczna na hoście USB (max 11 znakow) | `CNC_USB` | `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
+| `CNC_ACTIVE_SLOT_FILE` | Plik aktywnego slotu (`A`/`B`) | `/var/lib/cnc-control/shadow_active_slot.state` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_SHADOW_STATE_FILE` | Plik stanu SHADOW (JSON) | `/var/lib/cnc-control/shadow_state.json` | `shadow/state_store.py`, `webui/app.py` |
+| `CNC_SHADOW_HISTORY_FILE` | Plik historii przebudow SHADOW | `/var/lib/cnc-control/shadow_history.json` | `shadow/shadow_manager.py`, `webui/app.py` |
+| `CNC_SHADOW_LOCK_FILE` | Sciezka locka przebudowy SHADOW | `/var/run/cnc-shadow.lock` | `shadow/lock_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_SHADOW_DEBOUNCE_SECONDS` | Opoznienie laczenia zdarzen watchera | `4` | `shadow/shadow_manager.py` |
+| `CNC_SHADOW_SLOT_SIZE_MB` | Rozmiar slotu obrazu USB | `256` | `shadow/rebuild_engine.py` |
+| `CNC_SHADOW_TMP_SUFFIX` | Sufiks pliku tymczasowego przebudowy | `.tmp` | `shadow/rebuild_engine.py`, `shadow/slot_manager.py` |
+| `CNC_SHADOW_HISTORY_LIMIT` | Limit wpisow historii przebudow | `50` | `shadow/shadow_manager.py` |
 
 ---
 
@@ -320,15 +414,13 @@ cnc-control/
 ├── config/
 ├── led_status.py
 ├── led_status_cli.py
-├── net_mode.sh
 ├── status.sh
-├── usb_mode.sh
 ├── tools/
-│   ├── setup_commands.sh
 │   ├── setup_led_service.sh
 │   ├── setup_usb_service.sh
 │   ├── setup_webui.sh
 │   ├── setup_nmtui.sh
+│   ├── shadow_usb_export.sh
 │   └── setup_zerotier.sh
 └── webui/
     └── app.py
@@ -346,17 +438,16 @@ cnc-control/
 | `config/cnc-control.env.example` | Przykklad centralnej konfiguracji (EnvironmentFile). |
 | `led_status.py` | Demon LED WS2812 (GPIO18) monitorujacy IPC i sterujacy stanem LED. |
 | `led_status_cli.py` | CLI do zapisu trybu LED przez IPC (`/tmp/cnc_led_mode`). |
-| `net_mode.sh` | Legacy: przełączanie trybu sieciowego (host/gadget). |
 | `status.sh` | Szybki podgląd stanu systemu/połączeń. |
-| `usb_mode.sh` | Legacy: przełączanie trybu USB dla Raspberry Pi. |
 | `tools/` | Skrypty pomocnicze do konfiguracji środowiska. |
-| `tools/setup_commands.sh` | Instalacja komend skrótowych (`usb_mode` i `net_mode` jako legacy) oraz `status`. |
+| `tools/shadow_usb_export.sh` | Start eksportu USB w trybie SHADOW na podstawie aktywnego slotu. |
 | `tools/setup_led_service.sh` | Konfiguracja usługi `cnc-led.service` dla `led_status.py`. |
-| `tools/setup_usb_service.sh` | Konfiguracja usługi `cnc-usb.service` dla `usb_mode.sh`. |
+| `tools/setup_usb_service.sh` | Konfiguracja usługi `cnc-usb.service` dla eksportu SHADOW. |
 | `tools/setup_webui.sh` | Konfiguracja usługi `cnc-webui.service` dla webui. |
 | `tools/setup_nmtui.sh` | Instalacja i uruchomienie `nmtui`. |
 | `tools/setup_zerotier.sh` | Konfiguracja klienta ZeroTier. |
 | `tools/wifi_control.sh` | Skrypt pomocniczy do skanowania i łączenia Wi-Fi (`nmcli`). |
+| `tools/cnc_install_validation.sh` | Walidacja instalacji systemowej SHADOW-only (pakiety, env, sloty, state, systemd, g_mass_storage, LUN). |
 | `webui/` | Prosty interfejs WWW do obsługi narzędzi. |
 | `webui/app.py` | Aplikacja webowa (serwer) dla webui. |
 

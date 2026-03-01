@@ -6,7 +6,7 @@
 - Python 3 (required by WebUI)
 - Git
 - Root access (sudo)
-- Repository located at `/home/andrzej/cnc-control` (required by the systemd unit)
+- SHADOW packages: `dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`
 
 ### Hardware platform (target and test)
 
@@ -31,21 +31,61 @@ Optionally, you can set the installation user explicitly:
 CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 ```
 
+## Installation from another branch
+
+```bash
+cd ~
+wget https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+./bootstrap_cnc.sh --branch <branch-name>
+```
+
+Branch selection priority:
+- `--branch <branch-name>`
+- `CNC_GIT_BRANCH=<branch-name>`
+- default `main`
+
 The script prepares the system, clones/updates the repository, creates `.venv`,
 installs dependencies, and configures systemd services.
+
+After first-time installation, reboot to activate `dwc2/UDC`:
+
+```bash
+sudo reboot
+```
 
 ## Step-by-step installation
 
 ```bash
-git clone https://github.com/<your-user>/cnc-control.git /home/andrzej/cnc-control
-cd /home/andrzej/cnc-control
+git clone https://github.com/<your-user>/cnc-control.git ~/cnc-control
+cd ~/cnc-control
 python3 tools/bootstrap_env.py --target rpi
 sudo ./tools/setup_system.sh
 ```
 
+## Minimal requirements for selftest v2
+
+`cnc-selftest` runs as a regular user and requires `sudo -n` access for
+diagnostic commands that must run as root. Missing permissions result in a
+controlled critical error `ERR_MISSING_SUDO`.
+
+Minimal sudoers profile:
+
+```text
+cnc ALL=(root) NOPASSWD: /usr/bin/mount
+cnc ALL=(root) NOPASSWD: /usr/bin/umount
+cnc ALL=(root) NOPASSWD: /usr/sbin/modprobe
+cnc ALL=(root) NOPASSWD: /usr/bin/lsmod
+```
+
+Rules:
+
+- no wildcard `*`,
+- no access to other commands.
+
 Application dependencies are managed via `pyproject.toml`.
 `cnc-webui.service` and `cnc-led.service` prefer the interpreter at
-`/home/andrzej/cnc-control/.venv/bin/python3` (with fallback to system `python3`
+`<repo>/.venv/bin/python3` (with fallback to system `python3`
 via `setup_webui.sh` and `setup_led_service.sh` when the venv is missing).
 
 ## Environment profiles (DEV/RPI)
@@ -78,12 +118,21 @@ Central configuration file:
 
 The `tools/setup_system.sh` script copies the default `config/cnc-control.env.example` only if the destination file does not exist. After installation, fill in the values and save the file.
 
-## Environment variables
+## Environment variables (SHADOW-only)
 
-- `CNC_USB_IMG` – path to the USB Mass Storage image.
-- `CNC_USB_LABEL` – FAT label visible on the USB host (max 11 characters).
-- `CNC_MOUNT_POINT` – image mount point (G-code upload).
-- `CNC_UPLOAD_DIR` – directory where WebUI writes uploaded files.
+Minimum required set:
+
+- `CNC_SHADOW_ENABLED=true`
+- `CNC_MASTER_DIR=/var/lib/cnc-control/master`
+- `CNC_USB_IMG_A=/var/lib/cnc-control/cnc_usb_a.img`
+- `CNC_USB_IMG_B=/var/lib/cnc-control/cnc_usb_b.img`
+- `CNC_ACTIVE_SLOT_FILE=/var/lib/cnc-control/shadow_active_slot.state`
+- `CNC_SHADOW_STATE_FILE=/var/lib/cnc-control/shadow_state.json`
+- `CNC_SHADOW_HISTORY_FILE=/var/lib/cnc-control/shadow_history.json`
+- `CNC_SHADOW_SLOT_SIZE_MB=1024`
+- `CNC_SHADOW_TMP_SUFFIX=.tmp`
+- `CNC_SHADOW_LOCK_FILE=/var/run/cnc-shadow.lock`
+- `CNC_SHADOW_CONFIG_VERSION=1`
 
 ## Emergency Wi-Fi (Access Point)
 
@@ -140,7 +189,7 @@ fallback behavior.
 ## PolicyKit (GUI restart)
 
 The `tools/setup_system.sh` script installs a PolicyKit rule that allows the
-WebUI user (`andrzej`) to run `systemctl restart cnc-webui.service` without a
+WebUI installation user to run `systemctl restart cnc-webui.service` without a
 password. For manual setup, copy
 `systemd/polkit/50-cnc-webui-restart.rules` to `/etc/polkit-1/rules.d/`.
 
@@ -172,12 +221,7 @@ more important than full network browsing features.
 
 ## Operating modes
 
-- **SHADOW (current)** – the active production mode and default project direction.
-- **NET/USB (legacy)** – historical manual upload/USB switching mode.
-
-`NET/USB` mode is being gradually phased out and kept only for backward compatibility.
-Use SHADOW for new deployments.
-Treat `usb_mode.sh` and `net_mode.sh` as compatibility tools for migration and diagnostics.
+- **SHADOW (current)** – the only supported production mode and default project direction.
 
 ## LED Status Indicator
 
@@ -192,7 +236,7 @@ Service installation:
 
 ```bash
 chmod +x tools/setup_led_service.sh
-sudo tools/setup_led_service.sh /home/andrzej/cnc-control
+sudo tools/setup_led_service.sh ~/cnc-control
 ```
 
 Mode mapping:
@@ -200,8 +244,8 @@ Mode mapping:
 | Mode | Color | Behavior |
 |---|---|---|
 | `BOOT` | yellow `(255, 180, 0)` | steady |
-| `USB` | red `(255, 0, 0)` | steady |
-| `UPLOAD` | green `(0, 255, 0)` | steady |
+| `SHADOW_READY` | green `(0, 255, 0)` | steady |
+| `SHADOW_SYNC` | blue `(0, 0, 255)` | steady |
 | `AP` | blue `(0, 0, 255)` | blinking `1 Hz` |
 | `ERROR` | red `(255, 0, 0)` | fast blink `3 Hz` |
 | `IDLE` | dim white `(76, 76, 76)` | steady |
@@ -246,7 +290,7 @@ After=network.target
 Wants=network.target
 ```
 
-Recommended reboot: stop active USB export first (in legacy setups: `net_mode.sh`),
+Recommended reboot: stop active USB export via `sudo systemctl stop cnc-usb.service`,
 wait for the image to unmount, then run `sudo systemctl reboot` (or `sudo reboot`)
 from SSH/terminal.
 

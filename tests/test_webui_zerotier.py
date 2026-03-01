@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WEBUI_DIR = REPO_ROOT / "webui"
+
+if str(WEBUI_DIR) not in sys.path:
+    sys.path.insert(0, str(WEBUI_DIR))
+
+
+def load_module(module_path: Path, module_name: str):
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+webui_app = load_module(WEBUI_DIR / "app.py", "webui_app_for_zerotier_tests")
+
+
+def make_result(returncode: int, stdout: str = "", stderr: str = "") -> SimpleNamespace:
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_read_zerotier_state_handles_alias_enabled_state(monkeypatch) -> None:
+    responses = iter(
+        [
+            (make_result(0, "active\n"), None),
+            (make_result(0, "alias\n"), None),
+        ]
+    )
+
+    monkeypatch.setattr(
+        webui_app,
+        "run_systemctl_command",
+        lambda args, timeout=10: next(responses),
+    )
+
+    active, enabled, error = webui_app.read_zerotier_state()
+
+    assert active is True
+    assert enabled is True
+    assert error is None
+
+
+def test_read_zerotier_state_returns_missing_service_error(monkeypatch) -> None:
+    responses = iter(
+        [
+            (make_result(3, "inactive\n"), None),
+            (
+                make_result(
+                    1,
+                    "",
+                    "Failed to get unit file state for zerotier-one.service: "
+                    "No such file or directory",
+                ),
+                None,
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        webui_app,
+        "run_systemctl_command",
+        lambda args, timeout=10: next(responses),
+    )
+
+    active, enabled, error = webui_app.read_zerotier_state()
+
+    assert active is None
+    assert enabled is None
+    assert error == "Brak usługi ZeroTier"
+
+
+def test_api_zerotier_status_returns_200_when_service_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        webui_app,
+        "read_zerotier_state",
+        lambda: (None, None, "Brak usługi ZeroTier"),
+    )
+    client = webui_app.app.test_client()
+
+    response = client.get("/api/zerotier")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["active"] is False
+    assert payload["enabled"] is False
+    assert payload["available"] is False
+    assert payload["error"] == "Brak usługi ZeroTier"
+
+
+def test_api_zerotier_toggle_returns_409_when_service_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        webui_app,
+        "read_zerotier_state",
+        lambda: (None, None, "Brak usługi ZeroTier"),
+    )
+    client = webui_app.app.test_client()
+
+    response = client.post("/api/zerotier", json={"enabled": True})
+    payload = response.get_json()
+
+    assert response.status_code == 409
+    assert "Brak usługi ZeroTier" in payload["error"]
+
+
+def test_api_zerotier_setup_rejects_invalid_network_id() -> None:
+    client = webui_app.app.test_client()
+
+    response = client.post("/api/zerotier/setup", json={"network_id": "bad"})
+    payload = response.get_json()
+
+    assert response.status_code == 400
+    assert "Nieprawidłowy Network ID" in payload["error"]
+
+
+def test_api_zerotier_setup_returns_error_when_script_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(webui_app, "ZEROTIER_SETUP_SCRIPT", "/tmp/missing_setup_zerotier.sh")
+    client = webui_app.app.test_client()
+
+    response = client.post("/api/zerotier/setup", json={"network_id": ""})
+    payload = response.get_json()
+
+    assert response.status_code == 500
+    assert payload["error"] == "Brak skryptu setup_zerotier.sh"
+
+
+def test_api_zerotier_setup_installs_and_returns_status(monkeypatch) -> None:
+    monkeypatch.setattr(webui_app, "ZEROTIER_SETUP_SCRIPT", str(REPO_ROOT / "tools" / "setup_zerotier.sh"))
+    monkeypatch.setattr(
+        webui_app,
+        "run_command_with_sudo_fallback",
+        lambda command, timeout=10: (make_result(0, "ok\n"), None),
+    )
+    monkeypatch.setattr(
+        webui_app,
+        "read_zerotier_state",
+        lambda: (True, True, None),
+    )
+    client = webui_app.app.test_client()
+
+    response = client.post(
+        "/api/zerotier/setup",
+        json={"network_id": "8056c2e21c000001"},
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["network_id"] == "8056c2e21c000001"
+    assert payload["active"] is True
+    assert payload["enabled"] is True
+    assert payload["available"] is True
+
+
+def test_run_command_with_sudo_fallback_retries_when_script_requires_sudo(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command_args, **_kwargs):
+        calls.append(command_args)
+        if len(calls) == 1:
+            return make_result(
+                1,
+                "",
+                "Uruchom skrypt z sudo, np.: sudo ./tools/setup_zerotier.sh",
+            )
+        return make_result(0, "ok\n", "")
+
+    monkeypatch.setattr(
+        webui_app.shutil,
+        "which",
+        lambda command: "/usr/bin/sudo" if command == "sudo" else None,
+    )
+    monkeypatch.setattr(webui_app.subprocess, "run", fake_run)
+
+    result, error = webui_app.run_command_with_sudo_fallback(
+        ["bash", "/tmp/setup_zerotier.sh"],
+        timeout=5,
+    )
+
+    assert error is None
+    assert result is not None
+    assert result.returncode == 0
+    assert len(calls) == 2
+    assert calls[1][:3] == ["sudo", "-n", "bash"]

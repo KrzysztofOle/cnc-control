@@ -15,8 +15,10 @@ import json
 import re
 import shutil
 import sys
+import socket
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from hostname_utils import normalize_pretty_hostname, normalize_static_hostname
 
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,21 +59,6 @@ def parse_env_bool(value, default=False):
 ENV_FILE_PATH = os.environ.get("CNC_ENV_FILE", "/etc/cnc-control/cnc-control.env")
 load_environment_file(ENV_FILE_PATH)
 
-UPLOAD_DIR = os.environ.get("CNC_UPLOAD_DIR")
-if not UPLOAD_DIR:
-    app.logger.error("Brak zmiennej CNC_UPLOAD_DIR. Upload i lista plikow beda niedostepne.")
-NET_MODE_SCRIPT = os.environ.get(
-    "CNC_NET_MODE_SCRIPT",
-    os.path.join(REPO_ROOT, "net_mode.sh"),
-)
-USB_MODE_SCRIPT = os.environ.get(
-    "CNC_USB_MODE_SCRIPT",
-    os.path.join(REPO_ROOT, "usb_mode.sh"),
-)
-STATUS_SCRIPT = os.environ.get(
-    "CNC_STATUS_SCRIPT",
-    os.path.join(REPO_ROOT, "status.sh"),
-)
 WIFI_CONTROL_SCRIPT = os.environ.get(
     "CNC_WIFI_CONTROL_SCRIPT",
     os.path.join(REPO_ROOT, "tools", "wifi_control.sh"),
@@ -98,6 +85,8 @@ SHADOW_MASTER_DIR = os.environ.get(
     "CNC_MASTER_DIR",
     "/var/lib/cnc-control/master",
 )
+if not SHADOW_MASTER_DIR:
+    app.logger.error("Brak zmiennej CNC_MASTER_DIR. Upload i lista plikow beda niedostepne.")
 CONTROL_REPO_DIR = os.environ.get(
     "CNC_CONTROL_REPO",
     REPO_ROOT,
@@ -118,14 +107,37 @@ ZEROTIER_SERVICE = os.environ.get(
     "CNC_ZEROTIER_SERVICE",
     "zerotier-one",
 )
+ZEROTIER_SETUP_SCRIPT = os.environ.get(
+    "CNC_ZEROTIER_SETUP_SCRIPT",
+    os.path.join(REPO_ROOT, "tools", "setup_zerotier.sh"),
+)
 APP_VERSION_FILE = os.path.join(CONTROL_REPO_DIR, ".app_version")
 SEMVER_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+].*)?$")
+ZEROTIER_NETWORK_ID_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 HIDDEN_NAMES = {
     ".Spotlight-V100",
     ".fseventsd",
     ".Trashes",
 }
 _LED_IDLE_SET = False
+HOSTS_SYNC_SCRIPT = (
+    "import pathlib, sys\n"
+    "hostname = sys.argv[1]\n"
+    "path = pathlib.Path('/etc/hosts')\n"
+    "text = path.read_text(encoding='utf-8', errors='ignore')\n"
+    "lines = text.splitlines()\n"
+    "updated = False\n"
+    "result = []\n"
+    "for line in lines:\n"
+    "    if line.strip().startswith('127.0.1.1'):\n"
+    "        result.append('127.0.1.1\\t' + hostname)\n"
+    "        updated = True\n"
+    "    else:\n"
+    "        result.append(line)\n"
+    "if not updated:\n"
+    "    result.append('127.0.1.1\\t' + hostname)\n"
+    "path.write_text('\\n'.join(result) + '\\n', encoding='utf-8')\n"
+)
 
 
 def _set_led_mode(mode_name):
@@ -197,34 +209,11 @@ HTML = """
 <html>
 <head>
 <style>
-.indicator {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  margin-right: 6px;
-}
-.indicator--net { background-color: #3498db; }
-.indicator--usb { background-color: #e67e22; }
-.indicator--inactive { background-color: #bdc3c7; }
-
 .mode-label {
   display: inline-block;
   padding: 2px 10px;
   border-radius: 10px;
   font-weight: 600;
-}
-
-.mode-net {
-  color: #1f4f7a;
-  background: #e3f2fd;
-  border: 1px solid #90caf9;
-}
-
-.mode-usb {
-  color: #8a4f0a;
-  background: #fff3e0;
-  border: 1px solid #ffcc80;
 }
 
 .mode-shadow {
@@ -352,6 +341,38 @@ button:disabled {
   gap: 8px;
 }
 
+.cnc-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.cnc-file-link:hover {
+  text-decoration: underline;
+}
+
+.cnc-file-link-dir {
+  color: #0b4f9c;
+  font-weight: 600;
+}
+
+.cnc-entry-icon {
+  min-width: 1.4em;
+  text-align: center;
+  font-size: 16px;
+}
+
+#cnc-current-dir {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: #444444;
+}
+
+#cnc-current-dir code {
+  font-size: 12px;
+}
+
 #zerotier-panel {
   display: flex;
   flex-direction: column;
@@ -369,6 +390,11 @@ button:disabled {
 .zerotier-description {
   font-size: 13px;
   color: #555555;
+}
+
+.zerotier-network-id {
+  width: 220px;
+  max-width: 100%;
 }
 
 .zerotier-status {
@@ -555,11 +581,7 @@ body.ui-busy #loading-overlay * {
 {% if page != 'system' %}
 <h3>Operacje CNC</h3>
 <p><b>Tryb:</b>
-  {% if mode == 'SIEĆ (UPLOAD)' %}
-    <span id="mode-label" class="mode-label mode-net">{{ mode }}</span>
-  {% elif mode == 'USB (CNC)' %}
-    <span id="mode-label" class="mode-label mode-usb">{{ mode }}</span>
-  {% elif mode == 'SHADOW (A/B)' %}
+  {% if mode == 'SHADOW (A/B)' %}
     <span id="mode-label" class="mode-label mode-shadow">{{ mode }}</span>
   {% else %}
     <span id="mode-label" class="mode-label mode-unknown">{{ mode }}</span>
@@ -589,33 +611,36 @@ body.ui-busy #loading-overlay * {
 {% endif %}
 {% endif %}
 
-{% if not shadow_enabled %}
-<form action="/net" method="post">
-  <span class="indicator {{ 'indicator--net' if mode == 'SIEĆ (UPLOAD)' else 'indicator--inactive' }}" data-mode-indicator="NET"></span>
-  <button type="submit" data-mode-switch="NET">Tryb sieć (upload)</button>
-</form>
-
-<form action="/usb" method="post">
-  <span class="indicator {{ 'indicator--usb' if mode == 'USB (CNC)' else 'indicator--inactive' }}" data-mode-indicator="USB"></span>
-  <button type="submit" data-mode-switch="USB">Tryb USB (CNC)</button>
-</form>
-{% endif %}
-
 <hr>
 
 <h3>Pliki CNC</h3>
 <form id="delete-files-form" action="/delete-files" method="post" onsubmit="return handleDeleteSubmit(this);">
   <input type="hidden" name="confirm_delete" id="confirm-delete-input" value="no">
+  <input type="hidden" name="dir" value="{{ current_dir }}">
+  <p id="cnc-current-dir">
+    {% if current_dir %}
+      <a href="{{ url_for('index', dir=parent_dir) }}">[..]</a>
+    {% endif %}
+    Katalog: <code>/{{ current_dir }}</code>
+  </p>
   <ul id="cnc-files-list">
-  {% for f in files %}
+  {% for entry in files %}
     <li>
+      {% if entry.is_dir %}
+      <a class="cnc-file-link cnc-file-link-dir" href="{{ url_for('index', dir=entry.rel_path) }}">
+        <span class="cnc-entry-icon" aria-hidden="true">📁</span>
+        <span>{{ entry.name }}</span>
+      </a>
+      {% else %}
       <label class="cnc-file-entry">
-        <input type="checkbox" name="files" value="{{ f }}" class="cnc-file-checkbox">
-        <span>{{ f }}</span>
+        <input type="checkbox" name="files" value="{{ entry.rel_path }}" class="cnc-file-checkbox">
+        <span class="cnc-entry-icon" aria-hidden="true">📄</span>
+        <span>{{ entry.name }}</span>
       </label>
+      {% endif %}
     </li>
   {% else %}
-    <li>Brak plikow.</li>
+    <li>Brak plikow i folderow.</li>
   {% endfor %}
   </ul>
   <button type="submit" id="delete-files-button">Usun zaznaczone</button>
@@ -625,6 +650,7 @@ body.ui-busy #loading-overlay * {
 
 <h3>Upload pliku</h3>
 <form method=post enctype=multipart/form-data action="/upload">
+  <input type="hidden" name="dir" value="{{ current_dir }}">
   <input type=file name=file>
   <input type=submit value=Upload>
 </form>
@@ -634,6 +660,22 @@ body.ui-busy #loading-overlay * {
 <hr>
 
 <h3>System</h3>
+<div id="hostname-panel">
+  <div class="wifi-row">
+    <label for="hostname-input">Nazwa Raspberry Pi</label>
+    <input type="text" id="hostname-input" placeholder="np. CNC_USB">
+    <button type="button" id="hostname-save">Zmien nazwe</button>
+  </div>
+  <div class="wifi-row">
+    <span class="wifi-status wifi-status-muted"><b>Static:</b> <span id="hostname-static">-</span></span>
+    <span class="wifi-status wifi-status-muted"><b>Pretty:</b> <span id="hostname-pretty">-</span></span>
+    <span class="wifi-status wifi-status-muted"><b>mDNS:</b> <span id="hostname-mdns">-</span></span>
+  </div>
+  <div id="hostname-status" class="wifi-status wifi-status-muted">Status: nieznany</div>
+</div>
+
+<hr>
+
 <form action="/restart" method="post">
   <input type="hidden" name="next" value="system">
   <button type="submit">Restart</button>
@@ -643,8 +685,6 @@ body.ui-busy #loading-overlay * {
   <button
     type="button"
     id="restart-gui-button"
-    title="Niedostępne w trybie USB"
-    disabled
   >
     🔄 Restart GUI
   </button>
@@ -702,6 +742,12 @@ body.ui-busy #loading-overlay * {
   </div>
   <div class="zerotier-description">ON – zdalny dostęp aktywny</div>
   <div class="zerotier-description">OFF – zdalny dostęp wyłączony</div>
+  <div class="zerotier-row">
+    <label for="zerotier-network-id">Network ID</label>
+    <input type="text" id="zerotier-network-id" class="zerotier-network-id" maxlength="16" placeholder="opcjonalnie: 16 znaków hex" autocomplete="off" spellcheck="false">
+    <button type="button" id="zerotier-install">Dodaj usługę</button>
+  </div>
+  <div class="zerotier-description">Dodaje usługę ZeroTier; opcjonalny Network ID od razu wykona join.</div>
   <div id="zerotier-result" class="zerotier-status zerotier-status-muted"></div>
 </div>
 
@@ -867,13 +913,8 @@ body.ui-busy #loading-overlay * {
     if (!button) {
       return;
     }
-    const isUsb = mode === "USB";
-    button.disabled = isUsb;
-    if (isUsb) {
-      button.title = "Niedostępne w trybie USB";
-    } else {
-      button.removeAttribute("title");
-    }
+    button.disabled = false;
+    button.removeAttribute("title");
   }
 
   async function restartGui() {
@@ -1015,12 +1056,18 @@ body.ui-busy #loading-overlay * {
     );
 
     function updateDeleteState() {
+      if (checkboxes.length === 0) {
+        deleteButton.textContent = "Usun zaznaczone";
+        deleteButton.disabled = true;
+        return;
+      }
       const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
       if (selectedCount > 0) {
         deleteButton.textContent = "Usun zaznaczone (" + selectedCount + ")";
       } else {
         deleteButton.textContent = "Usun zaznaczone";
       }
+      deleteButton.disabled = false;
     }
 
     checkboxes.forEach((checkbox) => {
@@ -1068,18 +1115,10 @@ body.ui-busy #loading-overlay * {
   }
 
   const MODE_LABELS = {
-    NET: "SIEĆ (UPLOAD)",
-    USB: "USB (CNC)",
     SHADOW: "SHADOW (A/B)",
   };
   const MODE_CLASS = {
-    NET: "mode-net",
-    USB: "mode-usb",
     SHADOW: "mode-shadow",
-  };
-  const INDICATOR_CLASS = {
-    NET: "indicator--net",
-    USB: "indicator--usb",
   };
   let lastShadowRunId = null;
   let shadowFileRefreshPending = false;
@@ -1093,21 +1132,10 @@ body.ui-busy #loading-overlay * {
     const modeLabel = document.getElementById("mode-label");
     if (modeLabel) {
       modeLabel.textContent = label;
-      modeLabel.classList.remove("mode-net", "mode-usb", "mode-shadow", "mode-unknown");
+      modeLabel.classList.remove("mode-shadow", "mode-unknown");
       modeLabel.classList.add(MODE_CLASS[mode] || "mode-unknown");
     }
     updateRestartGuiButton(mode);
-    const indicators = document.querySelectorAll("[data-mode-indicator]");
-    indicators.forEach((indicator) => {
-      const indicatorMode = indicator.getAttribute("data-mode-indicator");
-      const isActive = indicatorMode === mode;
-      indicator.classList.remove("indicator--net", "indicator--usb", "indicator--inactive");
-      if (isActive) {
-        indicator.classList.add(INDICATOR_CLASS[mode] || "indicator--inactive");
-      } else {
-        indicator.classList.add("indicator--inactive");
-      }
-    });
   }
 
   function shadowFsmGroup(fsmState) {
@@ -1903,6 +1931,126 @@ body.ui-busy #loading-overlay * {
     })();
   }
 
+  function initHostnameControls() {
+    const input = document.getElementById("hostname-input");
+    if (!input) {
+      return;
+    }
+    const saveButton = document.getElementById("hostname-save");
+    const staticLabel = document.getElementById("hostname-static");
+    const prettyLabel = document.getElementById("hostname-pretty");
+    const mdnsLabel = document.getElementById("hostname-mdns");
+    const statusLabel = document.getElementById("hostname-status");
+
+    function setHostnameStatus(text, level) {
+      if (!statusLabel) {
+        return;
+      }
+      statusLabel.textContent = text;
+      statusLabel.classList.remove("wifi-status-ok", "wifi-status-error", "wifi-status-muted");
+      if (level === "ok") {
+        statusLabel.classList.add("wifi-status-ok");
+      } else if (level === "error") {
+        statusLabel.classList.add("wifi-status-error");
+      } else {
+        statusLabel.classList.add("wifi-status-muted");
+      }
+    }
+
+    function applyHostnamePayload(payload) {
+      const staticName = payload && payload.static ? String(payload.static) : "-";
+      const prettyName = payload && payload.pretty ? String(payload.pretty) : staticName;
+      const mdnsName = payload && payload.mdns ? String(payload.mdns) : (staticName !== "-" ? staticName + ".local" : "-");
+
+      if (staticLabel) {
+        staticLabel.textContent = staticName;
+      }
+      if (prettyLabel) {
+        prettyLabel.textContent = prettyName;
+      }
+      if (mdnsLabel) {
+        mdnsLabel.textContent = mdnsName;
+      }
+      if (input && !input.value.trim()) {
+        input.value = prettyName !== "-" ? prettyName : "";
+      }
+    }
+
+    async function refreshHostname() {
+      try {
+        const response = await fetch("/api/hostname", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error("Błąd odczytu nazwy hosta (HTTP " + response.status + ").");
+        }
+        const payload = await response.json();
+        applyHostnamePayload(payload);
+        setHostnameStatus("Status: gotowe", "muted");
+      } catch (error) {
+        setHostnameStatus(error.message || "Nie można odczytać nazwy hosta.", "error");
+      }
+    }
+
+    async function saveHostname() {
+      if (!saveButton || busy) {
+        return;
+      }
+      const requestedHostname = input.value.trim();
+      if (!requestedHostname) {
+        setHostnameStatus("Podaj nazwę hosta.", "error");
+        return;
+      }
+
+      setBusy(true, "Zmiana nazwy Raspberry Pi...");
+      setHostnameStatus("Zmieniam nazwę hosta...", "muted");
+      try {
+        const response = await fetch("/api/hostname", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ hostname: requestedHostname }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const message = payload && payload.error
+            ? payload.error
+            : "Błąd zmiany nazwy hosta (HTTP " + response.status + ").";
+          throw new Error(message);
+        }
+        applyHostnamePayload(payload);
+        input.value = payload && payload.pretty ? String(payload.pretty) : requestedHostname;
+        let message = payload && payload.message ? payload.message : "Zmieniono nazwę hosta.";
+        if (payload && payload.warning) {
+          message = message + " Uwaga: " + payload.warning;
+          setHostnameStatus(message, "error");
+        } else {
+          setHostnameStatus(message, "ok");
+        }
+      } catch (error) {
+        setHostnameStatus(error.message || "Nie udało się zmienić nazwy hosta.", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    if (saveButton) {
+      saveButton.addEventListener("click", saveHostname);
+    }
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      saveHostname();
+    });
+    refreshHostname();
+  }
+
   function initZeroTierControls() {
     const toggle = document.getElementById("zerotier-toggle");
     if (!toggle) {
@@ -1910,6 +2058,11 @@ body.ui-busy #loading-overlay * {
     }
     const stateLabel = document.getElementById("zerotier-state");
     const resultLabel = document.getElementById("zerotier-result");
+    const installButton = document.getElementById("zerotier-install");
+    const networkIdInput = document.getElementById("zerotier-network-id");
+    let toggleBusy = false;
+    let setupBusy = false;
+    let toggleForceDisabled = false;
 
     function setResult(text, level) {
       if (!resultLabel) {
@@ -1955,11 +2108,28 @@ body.ui-busy #loading-overlay * {
       }
     }
 
+    function updateZeroTierControlsState() {
+      toggle.disabled = toggleBusy || setupBusy || toggleForceDisabled;
+      if (installButton) {
+        installButton.disabled = toggleBusy || setupBusy;
+      }
+      if (networkIdInput) {
+        networkIdInput.disabled = toggleBusy || setupBusy;
+      }
+    }
+
     function setToggleBusy(isBusy) {
-      toggle.disabled = isBusy;
+      toggleBusy = Boolean(isBusy);
+      updateZeroTierControlsState();
+    }
+
+    function setSetupBusy(isBusy) {
+      setupBusy = Boolean(isBusy);
+      updateZeroTierControlsState();
     }
 
     async function refreshZeroTier() {
+      setToggleBusy(true);
       try {
         const response = await fetch("/api/zerotier", {
           method: "GET",
@@ -1973,23 +2143,37 @@ body.ui-busy #loading-overlay * {
         if (!payload || typeof payload.active !== "boolean") {
           throw new Error("Nieprawidłowa odpowiedź z API.");
         }
-        toggle.checked = Boolean(payload.active);
+        toggleForceDisabled = payload.available === false;
+        toggle.checked = Boolean(payload.active) && !toggleForceDisabled;
         setState(
-          payload.active ? "Status: aktywny" : "Status: wyłączony",
-          payload.active ? "ok" : "off",
+          toggle.checked ? "Status: aktywny" : "Status: wyłączony",
+          toggle.checked ? "ok" : "off",
         );
-        setResult("", "muted");
+        if (payload.available === false && payload.error) {
+          setResult(payload.error, "off");
+        } else {
+          setResult("", "muted");
+        }
       } catch (error) {
+        toggleForceDisabled = false;
         setState("Status: błąd", "error");
         setResult(error.message || "Błąd pobierania stanu.", "error");
+      } finally {
+        setToggleBusy(false);
       }
     }
 
     async function applyZeroTier(enabled) {
-      if (busy) {
+      if (busy || setupBusy || toggleForceDisabled) {
+        toggle.checked = !enabled;
+        if (toggleForceDisabled) {
+          toggle.checked = false;
+          setResult("Brak usługi ZeroTier. Użyj przycisku Dodaj usługę.", "off");
+        }
         return;
       }
       setToggleBusy(true);
+      setSetupBusy(true);
       setResult("Aktualizacja...", "muted");
       try {
         const response = await fetch("/api/zerotier", {
@@ -2025,6 +2209,72 @@ body.ui-busy #loading-overlay * {
         setResult(error.message || "Błąd zmiany stanu ZeroTier.", "error");
         setState("Status: błąd", "error");
       } finally {
+        setSetupBusy(false);
+        setToggleBusy(false);
+      }
+    }
+
+    async function installZeroTier() {
+      if (busy || toggleBusy || setupBusy) {
+        return;
+      }
+      const networkId = networkIdInput ? networkIdInput.value.trim() : "";
+      if (networkId && !/^[0-9a-fA-F]{16}$/.test(networkId)) {
+        setResult("Nieprawidłowy Network ID (wymagane 16 znaków hex).", "error");
+        return;
+      }
+
+      setSetupBusy(true);
+      setToggleBusy(true);
+      setResult("Instalacja ZeroTier...", "muted");
+      try {
+        const response = await fetch("/api/zerotier/setup", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ network_id: networkId }),
+        });
+        if (!response.ok) {
+          let message = "Nie udało się dodać usługi ZeroTier.";
+          try {
+            const payload = await response.json();
+            if (payload && payload.error) {
+              message = payload.error;
+            }
+          } catch (payloadError) {
+            message = message + " (HTTP " + response.status + ").";
+          }
+          throw new Error(message);
+        }
+
+        const payload = await response.json();
+        const isOn = Boolean(payload && payload.active);
+        toggleForceDisabled = payload && payload.available === false;
+        toggle.checked = isOn && !toggleForceDisabled;
+        setState(
+          toggle.checked ? "Status: aktywny" : "Status: wyłączony",
+          toggle.checked ? "ok" : "off",
+        );
+        if (networkIdInput && payload && typeof payload.network_id === "string") {
+          networkIdInput.value = payload.network_id;
+        }
+
+        let message = "Usługa ZeroTier została dodana.";
+        if (payload && payload.message) {
+          message = payload.message;
+        }
+        if (payload && payload.warning) {
+          message = message + " " + payload.warning;
+          setResult(message, "off");
+        } else {
+          setResult(message, "ok");
+        }
+      } catch (error) {
+        setResult(error.message || "Błąd dodawania usługi ZeroTier.", "error");
+      } finally {
+        setSetupBusy(false);
         setToggleBusy(false);
       }
     }
@@ -2032,6 +2282,19 @@ body.ui-busy #loading-overlay * {
     toggle.addEventListener("change", () => {
       applyZeroTier(toggle.checked);
     });
+
+    if (installButton) {
+      installButton.addEventListener("click", installZeroTier);
+    }
+    if (networkIdInput) {
+      networkIdInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        installZeroTier();
+      });
+    }
 
     refreshZeroTier();
   }
@@ -2066,6 +2329,7 @@ body.ui-busy #loading-overlay * {
 
     initShadowControls();
     initWifiControls();
+    initHostnameControls();
     initZeroTierControls();
     initFileDeleteControls();
   });
@@ -2075,35 +2339,104 @@ body.ui-busy #loading-overlay * {
 </html>
 """
 
-def is_usb_mode():
-    return subprocess.call("lsmod | grep -q g_mass_storage", shell=True) == 0
-
-
 def is_hidden_file(name):
     return name.startswith(".") or name in HIDDEN_NAMES
 
 
-def resolve_upload_file_path(upload_dir, raw_name):
-    if not isinstance(raw_name, str):
+def normalize_relative_upload_path(raw_path):
+    if raw_path is None:
+        return ""
+    if not isinstance(raw_path, str):
+        return None
+    candidate = raw_path.strip().replace("\\", "/")
+    if candidate in {"", "."}:
+        return ""
+    if candidate.startswith("/"):
+        return None
+
+    parts = []
+    for part in candidate.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            return None
+        if is_hidden_file(part):
+            return None
+        parts.append(part)
+
+    return "/".join(parts)
+
+
+def resolve_upload_path(upload_dir, raw_path, expect_directory=False):
+    normalized = normalize_relative_upload_path(raw_path)
+    if normalized is None:
         return None, None
-    name = raw_name
-    if not name:
-        return None, None
-    if name in {".", ".."}:
-        return None, None
-    if os.path.basename(name) != name:
-        return None, None
-    if is_hidden_file(name):
-        return None, None
+
     upload_abs = os.path.abspath(upload_dir)
-    target_abs = os.path.abspath(os.path.join(upload_abs, name))
+    target_abs = upload_abs
+    if normalized:
+        target_abs = os.path.abspath(os.path.join(upload_abs, normalized))
+
+    upload_real = os.path.realpath(upload_abs)
+    target_real = os.path.realpath(target_abs)
     try:
-        common = os.path.commonpath([upload_abs, target_abs])
+        common = os.path.commonpath([upload_real, target_real])
     except ValueError:
         return None, None
-    if common != upload_abs:
+    if common != upload_real:
         return None, None
-    return target_abs, name
+    if expect_directory and not os.path.isdir(target_abs):
+        return None, None
+    return target_abs, normalized
+
+
+def list_upload_entries(upload_dir, raw_dir):
+    current_abs, current_rel = resolve_upload_path(
+        upload_dir,
+        raw_dir,
+        expect_directory=True,
+    )
+    if not current_abs:
+        return None, None
+
+    entries = []
+    try:
+        names = os.listdir(current_abs)
+    except OSError:
+        return None, None
+
+    for name in names:
+        if is_hidden_file(name):
+            continue
+        entry_abs = os.path.join(current_abs, name)
+        is_directory = os.path.isdir(entry_abs) and not os.path.islink(entry_abs)
+        rel_path = name if not current_rel else f"{current_rel}/{name}"
+        entries.append(
+            {
+                "name": name,
+                "rel_path": rel_path,
+                "is_dir": is_directory,
+            }
+        )
+
+    entries.sort(key=lambda item: (0 if item["is_dir"] else 1, item["name"].casefold()))
+    return entries, current_rel
+
+
+def redirect_to_index(message=None, directory=""):
+    params = {}
+    if message:
+        params["msg"] = message
+    if directory:
+        params["dir"] = directory
+    return redirect(url_for("index", **params))
+
+
+def resolve_upload_file_path(upload_dir, raw_name):
+    target_abs, normalized = resolve_upload_path(upload_dir, raw_name)
+    if not target_abs or not normalized:
+        return None, None
+    return target_abs, normalized
 
 
 def log_webui_event(message):
@@ -2125,32 +2458,8 @@ def ap_disabled_response(endpoint_name):
     return jsonify({"error": message}), 403
 
 
-def parse_status_mode(output):
-    for line in output.splitlines():
-        if "Tryb pracy:" not in line:
-            continue
-        value = line.split("Tryb pracy:", 1)[1].strip()
-        value_norm = value.casefold()
-        if value_norm.startswith("usb"):
-            return "USB"
-        if value_norm.startswith("sieć") or value_norm.startswith("siec"):
-            return "NET"
-    return None
-
-
-def parse_status_mount_point(output):
-    for line in output.splitlines():
-        if not line.startswith("Punkt montowania:"):
-            continue
-        value = line.split("Punkt montowania:", 1)[1].strip()
-        return value or None
-    return None
-
-
 def get_upload_directory():
-    if CNC_SHADOW_ENABLED:
-        return SHADOW_MASTER_DIR
-    return UPLOAD_DIR
+    return SHADOW_MASTER_DIR
 
 
 def read_shadow_state():
@@ -2356,42 +2665,6 @@ def run_wifi_control(args, timeout=20):
     )
 
 
-def is_mount_active(mount_point):
-    if not mount_point:
-        return None
-    result = subprocess.run(
-        ["mount"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        app.logger.warning("Nie mozna odczytac listy montowan (rc=%s).", result.returncode)
-        return None
-    needle = f" on {mount_point} "
-    for line in (result.stdout or "").splitlines():
-        if needle in line:
-            return True
-    return False
-
-
-def is_samba_active():
-    if not shutil.which("systemctl"):
-        app.logger.warning("Brak systemctl - nie mozna sprawdzic smbd.")
-        return None
-    result = subprocess.run(
-        ["systemctl", "is-active", "smbd.service"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0 and (result.stdout or "").strip() == "active":
-        return True
-    if result.returncode != 0 and (result.stdout or "").strip() == "unknown":
-        app.logger.warning("smbd.service nie istnieje w systemd.")
-    return False
-
-
 def run_systemctl_command(args, timeout=10):
     if not shutil.which("systemctl"):
         return None, "Brak systemctl"
@@ -2410,7 +2683,7 @@ def run_systemctl_command(args, timeout=10):
     return result, None
 
 
-def is_systemctl_permission_error(result):
+def is_command_permission_error(result):
     detail = f"{result.stderr or ''}\n{result.stdout or ''}".casefold()
     markers = (
         "interactive authentication required",
@@ -2418,43 +2691,186 @@ def is_systemctl_permission_error(result):
         "access denied",
         "permission denied",
         "org.freedesktop.policykit1",
+        "must be superuser",
+        "must be root",
+        "not privileged",
+        "uruchom skrypt z sudo",
+        "run script with sudo",
+        "a password is required",
     )
     return any(marker in detail for marker in markers)
 
 
-def restart_systemd_unit(unit_name, timeout=10):
-    commands = [["systemctl", "--no-block", "restart", unit_name]]
+def run_command_with_sudo_fallback(command, timeout=10):
+    if not command:
+        return None, "Niepoprawne polecenie"
+
+    commands = [command]
     if shutil.which("sudo"):
-        commands.append(["sudo", "-n", "systemctl", "--no-block", "restart", unit_name])
+        commands.append(["sudo", "-n"] + command)
 
     last_result = None
-    for index, command in enumerate(commands):
+    for index, command_args in enumerate(commands):
         try:
             result = subprocess.run(
-                command,
+                command_args,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return None, "Timeout restartu GUI"
+            command_name = command[0] if command else "polecenia"
+            return None, f"Timeout polecenia: {command_name}"
         except OSError:
             if index == len(commands) - 1:
-                return None, "Nie można uruchomić systemctl"
+                command_name = command[0] if command else "polecenia"
+                return None, f"Nie można uruchomić polecenia: {command_name}"
             continue
 
         last_result = result
         if result.returncode == 0:
             return result, None
-        if index == 0 and len(commands) > 1 and is_systemctl_permission_error(result):
+        if index == 0 and len(commands) > 1 and is_command_permission_error(result):
             continue
         break
     return last_result, None
 
 
+def restart_systemd_unit(unit_name, timeout=10):
+    result, error = run_command_with_sudo_fallback(
+        ["systemctl", "--no-block", "restart", unit_name],
+        timeout=timeout,
+    )
+    if error:
+        if "Timeout polecenia" in error:
+            return None, "Timeout restartu GUI"
+        if "Nie można uruchomić polecenia" in error:
+            return None, "Nie można uruchomić systemctl"
+        return None, error
+    return result, None
+
+
+def read_hostname_state():
+    static_name = socket.gethostname().strip()
+    pretty_name = ""
+
+    if shutil.which("hostnamectl"):
+        try:
+            static_result = subprocess.run(
+                ["hostnamectl", "--static"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if static_result.returncode == 0 and static_result.stdout.strip():
+                static_name = static_result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+        try:
+            pretty_result = subprocess.run(
+                ["hostnamectl", "--pretty"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if pretty_result.returncode == 0 and pretty_result.stdout.strip():
+                pretty_name = pretty_result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if not pretty_name:
+        pretty_name = static_name
+    return {
+        "static": static_name,
+        "pretty": pretty_name,
+        "mdns": f"{static_name}.local",
+    }
+
+
+def update_hosts_hostname_mapping(static_hostname):
+    python_exec = shutil.which("python3") or sys.executable
+    if not python_exec:
+        return "Brak python3 do aktualizacji /etc/hosts"
+
+    result, error = run_command_with_sudo_fallback(
+        [python_exec, "-c", HOSTS_SYNC_SCRIPT, static_hostname],
+        timeout=8,
+    )
+    if error:
+        return error
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        if detail:
+            return f"Nie można zaktualizować /etc/hosts: {detail}"
+        return "Nie można zaktualizować /etc/hosts"
+    return None
+
+
+def apply_hostname_change(hostname_value):
+    if not shutil.which("hostnamectl"):
+        return None, "Brak hostnamectl"
+
+    pretty_name = normalize_pretty_hostname(hostname_value)
+    if not pretty_name:
+        return None, "Nazwa hosta nie moze byc pusta"
+
+    static_name = normalize_static_hostname(pretty_name)
+    if not static_name:
+        return None, (
+            "Nieprawidlowa nazwa hosta. Dozwolone znaki dla static hostname: "
+            "litery, cyfry i '-' (1-63 znaki)."
+        )
+
+    commands = [
+        ["hostnamectl", "set-hostname", static_name, "--static"],
+        ["hostnamectl", "set-hostname", static_name, "--transient"],
+        ["hostnamectl", "set-hostname", pretty_name, "--pretty"],
+    ]
+
+    for command in commands:
+        result, error = run_command_with_sudo_fallback(command, timeout=10)
+        if error:
+            return None, error
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if detail:
+                return None, f"Blad zmiany nazwy hosta: {detail}"
+            return None, "Blad zmiany nazwy hosta"
+
+    warnings = []
+    hosts_warning = update_hosts_hostname_mapping(static_name)
+    if hosts_warning:
+        warnings.append(hosts_warning)
+
+    avahi_result, avahi_error = run_command_with_sudo_fallback(
+        ["systemctl", "restart", "avahi-daemon"],
+        timeout=8,
+    )
+    if avahi_error:
+        warnings.append(f"Nie mozna zrestartowac avahi-daemon: {avahi_error}")
+    elif avahi_result.returncode != 0:
+        detail = (avahi_result.stderr or avahi_result.stdout or "").strip()
+        if detail:
+            warnings.append(f"Nie mozna zrestartowac avahi-daemon: {detail}")
+        else:
+            warnings.append("Nie mozna zrestartowac avahi-daemon")
+
+    current = read_hostname_state()
+    current["warnings"] = warnings
+    return current, None
+
+
 def parse_systemctl_state(value, true_value, false_values):
-    if value == true_value:
+    if isinstance(true_value, str):
+        true_values = {true_value}
+    else:
+        true_values = set(true_value)
+
+    if value in true_values:
         return True, None
     if value in false_values:
         return False, None
@@ -2463,15 +2879,43 @@ def parse_systemctl_state(value, true_value, false_values):
     return None, f"Nieznany stan systemctl: {value}"
 
 
+def is_systemctl_missing_unit(result):
+    detail = f"{result.stderr or ''}\n{result.stdout or ''}".casefold()
+    markers = (
+        "could not be found",
+        "not found",
+        "no such file or directory",
+        "not loaded",
+    )
+    return any(marker in detail for marker in markers)
+
+
+def parse_systemctl_result(result, true_values, false_values):
+    value = (result.stdout or "").strip()
+    parsed_value, parse_error = parse_systemctl_state(value, true_values, false_values)
+    if not parse_error:
+        return parsed_value, None
+
+    if is_systemctl_missing_unit(result):
+        return None, "Brak usługi ZeroTier"
+
+    if result.returncode != 0 and not value:
+        detail = (result.stderr or "").strip()
+        if detail:
+            return None, f"Błąd systemctl: {detail}"
+        return None, "Błąd systemctl"
+
+    return None, parse_error
+
+
 def read_zerotier_state():
     result, error = run_systemctl_command(["is-active", ZEROTIER_SERVICE], timeout=6)
     if error:
         return None, None, error
-    active_value = (result.stdout or "").strip()
-    active, active_error = parse_systemctl_state(
-        active_value,
-        "active",
-        {"inactive", "failed", "deactivating", "activating"},
+    active, active_error = parse_systemctl_result(
+        result,
+        {"active", "reloading"},
+        {"inactive", "failed", "deactivating", "activating", "maintenance"},
     )
     if active_error:
         return None, None, active_error
@@ -2479,15 +2923,47 @@ def read_zerotier_state():
     result, error = run_systemctl_command(["is-enabled", ZEROTIER_SERVICE], timeout=6)
     if error:
         return None, None, error
-    enabled_value = (result.stdout or "").strip()
-    enabled, enabled_error = parse_systemctl_state(
-        enabled_value,
-        "enabled",
-        {"disabled", "static", "indirect", "masked"},
+    enabled, enabled_error = parse_systemctl_result(
+        result,
+        {"enabled", "enabled-runtime", "linked", "linked-runtime", "alias"},
+        {
+            "disabled",
+            "static",
+            "indirect",
+            "masked",
+            "masked-runtime",
+            "generated",
+            "transient",
+            "bad",
+        },
     )
     if enabled_error:
         return None, None, enabled_error
     return active, enabled, None
+
+
+def normalize_zerotier_network_id(value):
+    if value is None:
+        return "", None
+    if not isinstance(value, str):
+        return None, "Pole network_id musi być typu string"
+
+    normalized = value.strip()
+    if not normalized:
+        return "", None
+    if not ZEROTIER_NETWORK_ID_RE.fullmatch(normalized):
+        return None, "Nieprawidłowy Network ID (oczekiwane 16 znaków hex)"
+    return normalized.lower(), None
+
+
+def setup_zerotier_service(network_id):
+    if not os.path.isfile(ZEROTIER_SETUP_SCRIPT):
+        return None, "Brak skryptu setup_zerotier.sh"
+
+    command = ["bash", ZEROTIER_SETUP_SCRIPT]
+    if network_id:
+        command.append(network_id)
+    return run_command_with_sudo_fallback(command, timeout=180)
 
 
 def run_git_command(args, cwd, label):
@@ -2679,38 +3155,6 @@ def redirect_to_next(message=None):
     return redirect(url_for("index"))
 
 
-def run_mode_script(script_path, mode_label):
-    try:
-        result = subprocess.run(
-            [script_path],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as exc:
-        app.logger.error("Nie mozna uruchomic skryptu trybu %s: %s", mode_label, exc)
-        return False, f"Blad przelaczania na tryb: {mode_label}"
-
-    stdout = (result.stdout or "").strip()
-    stderr = (result.stderr or "").strip()
-    if result.returncode != 0:
-        app.logger.error(
-            "Skrypt trybu %s zakonczyl sie bledem (rc=%s). stdout='%s' stderr='%s'",
-            mode_label,
-            result.returncode,
-            stdout,
-            stderr,
-        )
-        detail = stderr or stdout
-        if detail:
-            return False, f"Blad trybu {mode_label}: {detail}"
-        return False, f"Blad przelaczania na tryb: {mode_label}"
-
-    if stderr:
-        app.logger.warning("Skrypt trybu %s stderr: %s", mode_label, stderr)
-    return True, None
-
-
 @app.route("/")
 def index():
     upload_dir = get_upload_directory()
@@ -2721,24 +3165,25 @@ def index():
     shadow_fsm_class = "unknown"
     if shadow_state:
         shadow_fsm_class = shadow_fsm_group(shadow_state.get("fsm_state"))
-    if CNC_SHADOW_ENABLED:
-        mode = "SHADOW (A/B)"
-    else:
-        usb = is_usb_mode()
-        mode = "USB (CNC)" if usb else "SIEĆ (UPLOAD)"
+    mode = "SHADOW (A/B)" if CNC_SHADOW_ENABLED else "SHADOW (A/B) [DISABLED]"
     files = []
+    current_dir = ""
+    parent_dir = ""
     message = request.args.get("msg")
+    requested_dir = request.args.get("dir")
     version_data = get_app_version()
     if not upload_dir and not message:
-        if CNC_SHADOW_ENABLED:
-            message = "Brak konfiguracji CNC_MASTER_DIR"
-        else:
-            message = "Brak konfiguracji CNC_UPLOAD_DIR"
+        message = "Brak konfiguracji CNC_MASTER_DIR"
+    if not CNC_SHADOW_ENABLED and not message:
+        message = "Tryb SHADOW jest wylaczony w konfiguracji (CNC_SHADOW_ENABLED=false)."
     if upload_dir and os.path.isdir(upload_dir):
-        files = sorted(
-            [name for name in os.listdir(upload_dir) if not is_hidden_file(name)],
-            key=str.casefold,
-        )
+        files, current_dir = list_upload_entries(upload_dir, requested_dir)
+        if files is None:
+            files = []
+            if not message:
+                message = "Katalog jest niedostepny albo sciezka jest nieprawidlowa."
+        if current_dir:
+            parent_dir = current_dir.rsplit("/", 1)[0] if "/" in current_dir else ""
     if CNC_SHADOW_ENABLED and shadow_state and shadow_state.get("fsm_state") == "ERROR":
         if not message and isinstance(shadow_state.get("last_error"), dict):
             error_code = shadow_state["last_error"].get("code", "ERR")
@@ -2749,6 +3194,8 @@ def index():
         page="main",
         mode=mode,
         files=files,
+        current_dir=current_dir,
+        parent_dir=parent_dir,
         message=message,
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
@@ -2775,6 +3222,8 @@ def system():
         page="system",
         mode=None,
         files=[],
+        current_dir="",
+        parent_dir="",
         message=message,
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
@@ -2785,79 +3234,24 @@ def system():
         shadow_history=shadow_history,
     )
 
-@app.route("/net", methods=["POST"])
-def net():
-    if CNC_SHADOW_ENABLED:
-        return redirect(url_for("index", msg="Tryb SHADOW: przelaczanie NET/USB jest zablokowane"))
-    ok, error_message = run_mode_script(NET_MODE_SCRIPT, "SIEĆ (UPLOAD)")
-    if not ok:
-        return redirect(url_for("index", msg=error_message))
-    return redirect(url_for("index", msg="Tryb SIEĆ aktywny"))
-
-@app.route("/usb", methods=["POST"])
-def usb():
-    if CNC_SHADOW_ENABLED:
-        return redirect(url_for("index", msg="Tryb SHADOW: przelaczanie NET/USB jest zablokowane"))
-    ok, error_message = run_mode_script(USB_MODE_SCRIPT, "USB (CNC)")
-    if not ok:
-        return redirect(url_for("index", msg=error_message))
-    return redirect(url_for("index", msg="Tryb USB aktywny"))
-
 @app.route("/api/status", methods=["GET"])
 def api_status():
-    if CNC_SHADOW_ENABLED:
-        shadow_state = read_shadow_state()
-        fsm_state = "UNKNOWN"
-        if shadow_state:
-            fsm_state = shadow_state.get("fsm_state", "UNKNOWN")
-        switching = fsm_state in {
-            "CHANGE_DETECTED",
-            "BUILD_SLOT_A",
-            "BUILD_SLOT_B",
-            "EXPORT_STOP",
-            "EXPORT_START",
-        }
-        return jsonify(
-            {
-                "mode": "SHADOW",
-                "shadow_enabled": True,
-                "shadow_state": shadow_state,
-                "switching": switching,
-                "ap_enabled": CNC_AP_ENABLED,
-            }
-        )
-
-    result = subprocess.run(
-        [STATUS_SCRIPT],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    stdout = result.stdout or ""
-    stderr = result.stderr or ""
-    mode = parse_status_mode(stdout)
-    mount_point = parse_status_mount_point(stdout)
-    if not mode:
-        app.logger.warning(
-            "Nie rozpoznano trybu z status.sh (rc=%s). stdout='%s' stderr='%s'",
-            result.returncode,
-            stdout.strip(),
-            stderr.strip(),
-        )
-        return jsonify({"mode": None, "error": "Brak trybu w status.sh"}), 500
-    usb_gadget = mode == "USB"
-    img_mounted = is_mount_active(mount_point)
-    samba_active = is_samba_active()
-    switching = None
-    if img_mounted is not None:
-        switching = usb_gadget and img_mounted
+    shadow_state = read_shadow_state()
+    fsm_state = "UNKNOWN"
+    if shadow_state:
+        fsm_state = shadow_state.get("fsm_state", "UNKNOWN")
+    switching = fsm_state in {
+        "CHANGE_DETECTED",
+        "BUILD_SLOT_A",
+        "BUILD_SLOT_B",
+        "EXPORT_STOP",
+        "EXPORT_START",
+    }
     return jsonify(
         {
-            "mode": mode,
-            "usb_gadget": usb_gadget,
-            "samba": samba_active,
-            "mount_point": mount_point,
-            "img_mounted": img_mounted,
+            "mode": "SHADOW",
+            "shadow_enabled": CNC_SHADOW_ENABLED,
+            "shadow_state": shadow_state,
             "switching": switching,
             "ap_enabled": CNC_AP_ENABLED,
         }
@@ -2906,46 +3300,6 @@ def api_shadow_manual_status():
 
 @app.route("/api/restart-gui", methods=["POST"])
 def api_restart_gui():
-    if not CNC_SHADOW_ENABLED:
-        try:
-            status_result = subprocess.run(
-                [STATUS_SCRIPT],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return jsonify({"error": "Timeout status.sh"}), 500
-        except OSError:
-            return jsonify({"error": "Nie można uruchomić status.sh"}), 500
-
-        stdout = status_result.stdout or ""
-        stderr = status_result.stderr or ""
-        if status_result.returncode != 0:
-            app.logger.warning(
-                "status.sh zakonczony bledem (rc=%s). stdout='%s' stderr='%s'",
-                status_result.returncode,
-                stdout.strip(),
-                stderr.strip(),
-            )
-            return jsonify({"error": "Błąd status.sh"}), 500
-
-        mode = parse_status_mode(stdout)
-        if not mode:
-            app.logger.warning(
-                "Nie rozpoznano trybu z status.sh. stdout='%s' stderr='%s'",
-                stdout.strip(),
-                stderr.strip(),
-            )
-            return jsonify({"error": "Brak trybu w status.sh"}), 500
-
-        if mode == "USB":
-            return jsonify({"error": "GUI restart disabled in USB mode"}), 409
-
-        if mode != "NET":
-            return jsonify({"error": "Nieznany tryb pracy"}), 500
-
     restart_result, restart_error = restart_systemd_unit(WEBUI_SYSTEMD_UNIT, timeout=10)
     if restart_error:
         return jsonify({"error": restart_error}), 500
@@ -2959,12 +3313,57 @@ def api_restart_gui():
 
     return jsonify({"ok": True})
 
+
+@app.route("/api/hostname", methods=["GET"])
+def api_hostname_get():
+    return jsonify(read_hostname_state())
+
+
+@app.route("/api/hostname", methods=["POST"])
+def api_hostname_set():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+
+    hostname_value = payload.get("hostname")
+    if not isinstance(hostname_value, str):
+        return jsonify({"error": "Pole hostname musi być typu string"}), 400
+
+    hostname_state, error = apply_hostname_change(hostname_value)
+    if error:
+        if error.startswith("Nieprawidlowa nazwa hosta") or error.endswith("pusta"):
+            return jsonify({"error": error}), 400
+        return jsonify({"error": error}), 500
+
+    warnings = hostname_state.pop("warnings", [])
+    response = {
+        "ok": True,
+        "message": (
+            "Zmieniono nazwę hosta. "
+            "Nowy adres mDNS: " + hostname_state.get("mdns", "")
+        ),
+        **hostname_state,
+    }
+    if warnings:
+        response["warning"] = "; ".join(warnings)
+    return jsonify(response)
+
+
 @app.route("/api/zerotier", methods=["GET"])
 def api_zerotier_status():
     active, enabled, error = read_zerotier_state()
     if error:
+        if error == "Brak usługi ZeroTier":
+            return jsonify(
+                {
+                    "active": False,
+                    "enabled": False,
+                    "available": False,
+                    "error": error,
+                }
+            )
         return jsonify({"error": error}), 500
-    return jsonify({"active": bool(active), "enabled": bool(enabled)})
+    return jsonify({"active": bool(active), "enabled": bool(enabled), "available": True})
 
 @app.route("/api/zerotier", methods=["POST"])
 def api_zerotier_toggle():
@@ -2974,6 +3373,12 @@ def api_zerotier_toggle():
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         return jsonify({"error": "Pole enabled musi być typu boolean"}), 400
+
+    _active, _enabled, state_error = read_zerotier_state()
+    if state_error:
+        if state_error == "Brak usługi ZeroTier":
+            return jsonify({"error": "Brak usługi ZeroTier. Użyj przycisku Dodaj usługę."}), 409
+        return jsonify({"error": state_error}), 500
 
     if enabled:
         result, error = run_systemctl_command(["enable", ZEROTIER_SERVICE], timeout=10)
@@ -3017,6 +3422,49 @@ def api_zerotier_toggle():
             message = f"{message}: {detail}"
         return jsonify({"error": message}), 500
     return jsonify({"status": "off"})
+
+
+@app.route("/api/zerotier/setup", methods=["POST"])
+def api_zerotier_setup():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+
+    network_id, network_error = normalize_zerotier_network_id(payload.get("network_id"))
+    if network_error:
+        return jsonify({"error": network_error}), 400
+
+    result, error = setup_zerotier_service(network_id)
+    if error:
+        return jsonify({"error": error}), 500
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        message = "Nie udało się dodać usługi ZeroTier"
+        if detail:
+            message = f"{message}: {detail}"
+        return jsonify({"error": message}), 500
+
+    active, enabled, state_error = read_zerotier_state()
+    if state_error and state_error != "Brak usługi ZeroTier":
+        return jsonify({"error": state_error}), 500
+
+    response = {
+        "ok": True,
+        "message": (
+            "Usługa ZeroTier została dodana."
+            if not network_id
+            else f"Usługa ZeroTier została dodana. Wysłano join do sieci {network_id}."
+        ),
+        "network_id": network_id or None,
+        "active": bool(active),
+        "enabled": bool(enabled),
+        "available": state_error != "Brak usługi ZeroTier",
+    }
+    if state_error == "Brak usługi ZeroTier":
+        response["warning"] = state_error
+    return jsonify(response)
 
 @app.route("/wifi/scan", methods=["GET"])
 def wifi_scan():
@@ -3213,71 +3661,54 @@ def wifi_profile_delete():
 def upload():
     upload_dir = get_upload_directory()
     if not upload_dir:
-        if CNC_SHADOW_ENABLED:
-            return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
-        return redirect(url_for("index", msg="Brak konfiguracji CNC_UPLOAD_DIR"))
+        return redirect_to_index("Brak konfiguracji CNC_MASTER_DIR")
 
-    if not CNC_SHADOW_ENABLED:
-        if is_usb_mode():
-            return redirect(url_for("index", msg="Tryb USB: upload niedostępny"))
-
-        mount_active = is_mount_active(upload_dir)
-        if mount_active is not True:
-            log_webui_event(
-                f"Upload blocked: upload dir not mounted ({upload_dir}), mount_active={mount_active}"
-            )
-            return redirect(
-                url_for("index", msg="Upload niedostepny: obraz USB nie jest zamontowany")
-            )
+    target_dir, current_dir = resolve_upload_path(
+        upload_dir,
+        request.form.get("dir"),
+        expect_directory=True,
+    )
+    if not target_dir:
+        return redirect_to_index("Nieprawidlowy katalog docelowy")
 
     if "file" not in request.files:
-        return redirect(url_for("index", msg="Brak pliku w żądaniu"))
+        return redirect_to_index("Brak pliku w żądaniu", current_dir)
 
     f = request.files["file"]
     if not f or f.filename == "":
-        return redirect(url_for("index", msg="Nie wybrano pliku"))
+        return redirect_to_index("Nie wybrano pliku", current_dir)
 
     safe_name = secure_filename(f.filename)
     if safe_name == "":
-        return redirect(url_for("index", msg="Nieprawidłowa nazwa pliku"))
+        return redirect_to_index("Nieprawidłowa nazwa pliku", current_dir)
 
     try:
-        os.makedirs(upload_dir, exist_ok=True)
-        target_path = os.path.join(upload_dir, safe_name)
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, safe_name)
         f.save(target_path)
     except Exception:
-        return redirect(url_for("index", msg="Błąd zapisu pliku"))
+        return redirect_to_index("Błąd zapisu pliku", current_dir)
 
-    return redirect(url_for("index", msg="Upload OK"))
+    return redirect_to_index("Upload OK", current_dir)
 
 
 @app.route("/delete-files", methods=["POST"])
 def delete_files():
     upload_dir = get_upload_directory()
     if not upload_dir:
-        if CNC_SHADOW_ENABLED:
-            return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
-        return redirect(url_for("index", msg="Brak konfiguracji CNC_UPLOAD_DIR"))
+        return redirect_to_index("Brak konfiguracji CNC_MASTER_DIR")
 
-    if not CNC_SHADOW_ENABLED:
-        if is_usb_mode():
-            return redirect(url_for("index", msg="Tryb USB: kasowanie niedostepne"))
-
-        mount_active = is_mount_active(upload_dir)
-        if mount_active is not True:
-            log_webui_event(
-                f"Delete blocked: upload dir not mounted ({upload_dir}), mount_active={mount_active}"
-            )
-            return redirect(
-                url_for("index", msg="Kasowanie niedostepne: obraz USB nie jest zamontowany")
-            )
-
-    if not os.path.isdir(upload_dir):
-        return redirect(url_for("index", msg="Katalog plikow CNC jest niedostepny"))
+    _, current_dir = resolve_upload_path(
+        upload_dir,
+        request.form.get("dir"),
+        expect_directory=True,
+    )
+    if current_dir is None:
+        return redirect_to_index("Katalog plikow CNC jest niedostepny")
 
     confirm_delete = (request.form.get("confirm_delete") or "").strip().casefold()
     if confirm_delete not in {"yes", "true", "1", "on"}:
-        return redirect(url_for("index", msg="Kasowanie anulowane: brak potwierdzenia"))
+        return redirect_to_index("Kasowanie anulowane: brak potwierdzenia", current_dir)
 
     requested_files = request.form.getlist("files")
     unique_files = []
@@ -3289,7 +3720,7 @@ def delete_files():
         unique_files.append(raw_name)
 
     if not unique_files:
-        return redirect(url_for("index", msg="Nie wybrano plikow do usuniecia"))
+        return redirect_to_index("Nie wybrano plikow do usuniecia", current_dir)
 
     deleted_count = 0
     failed_count = 0
@@ -3297,6 +3728,10 @@ def delete_files():
     for raw_name in unique_files:
         target_path, clean_name = resolve_upload_file_path(upload_dir, raw_name)
         if not target_path or not clean_name:
+            failed_count += 1
+            continue
+        clean_parent = os.path.dirname(clean_name).replace("\\", "/")
+        if clean_parent != current_dir:
             failed_count += 1
             continue
         if not os.path.exists(target_path):
@@ -3312,15 +3747,13 @@ def delete_files():
             failed_count += 1
 
     if deleted_count == 0:
-        return redirect(url_for("index", msg="Nie udalo sie usunac wybranych plikow"))
+        return redirect_to_index("Nie udalo sie usunac wybranych plikow", current_dir)
     if failed_count > 0:
-        return redirect(
-            url_for(
-                "index",
-                msg=f"Usunieto plikow: {deleted_count}. Bledy podczas kasowania: {failed_count}.",
-            )
+        return redirect_to_index(
+            f"Usunieto plikow: {deleted_count}. Bledy podczas kasowania: {failed_count}.",
+            current_dir,
         )
-    return redirect(url_for("index", msg=f"Usunieto plikow: {deleted_count}."))
+    return redirect_to_index(f"Usunieto plikow: {deleted_count}.", current_dir)
 
 @app.route("/restart", methods=["POST"])
 def restart():
@@ -3532,13 +3965,21 @@ def download_startup_log():
     except Exception:
         return redirect_to_next("Błąd pobierania logu startowego")
 
-def start_net_usb():
+def start_webui():
     app.run(host="0.0.0.0", port=8080)
+
+
+def start_shadow_mode():
+    from shadow.runtime_registry import set_shadow_manager
+    from shadow.shadow_manager import ShadowManager
+
+    shadow_manager = ShadowManager.from_environment(os.environ)
+    set_shadow_manager(shadow_manager)
+    shadow_manager.start()
+    start_webui()
 
 
 if __name__ == "__main__":
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, REPO_ROOT)
-    from mode_selector import ModeSelector
-
-    ModeSelector().start()
+    start_shadow_mode()

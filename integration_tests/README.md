@@ -11,6 +11,9 @@ Runner pokrywa:
 - SMB (zapis/usuwanie przez udział),
 - USB (walidacja trybu gadget + opcjonalny odczyt host-side),
 - NET->USB sync oraz pomiary czasowe.
+- SHADOW watcher (wykrywanie zmian i rebuild),
+- synchronizację plików SHADOW (master -> aktywny slot),
+- gotowość G-code w aktywnym runtime LUN SHADOW.
 
 ## Zasada uruchamiania na najnowszym kodzie
 
@@ -26,17 +29,13 @@ zdalny etap odświeżenia CI:
    - `tools/setup_usb_service.sh`
    - `tools/setup_led_service.sh`
 4. Diagnostyka:
-   - `./tools/cnc_selftest.sh --json`
+   - selftest v2 uruchamiany przez Python (`cnc_control.selftest.core.run_selftest`)
    - `systemctl is-active cnc-webui.service`
    - `systemctl is-active cnc-usb.service`
    - `systemctl is-active cnc-led.service`
-   - `journalctl -p 3 -n 20 --no-pager` (wymagane: brak wpisów zwiazanych z CNC)
 
-Runner ma wbudowany auto-repair selftestu dla przypadku SHADOW
-`Runtime LUN image matches expected`:
-- wykrywa fail tej jednej kontroli,
-- przeładowuje `g_mass_storage` na aktywny slot (`A/B`),
-- uruchamia `cnc_selftest` ponownie (jedna proba naprawy).
+Preflight nie posiada lokalnej implementacji filtra journal i nie duplikuje
+definicji `critical`. Jedynym źródłem prawdy diagnostyki jest selftest v2.
 
 Jeśli którykolwiek krok powyżej zakończy się błędem, preflight kończy się statusem
 `failed`, a kolejne fazy są pomijane.
@@ -50,7 +49,8 @@ Jeśli którykolwiek krok powyżej zakończy się błędem, preflight kończy si
 - `usb`: preflight + `phase_3_usb` (z `--usb-host-mount` także bezpośredni odczyt pliku z hosta USB)
 - `sync`: preflight + `phase_4_sync_net_to_usb`
 - `perf`: preflight + `phase_5_performance`
-- `all`: preflight + wszystkie fazy funkcjonalne (`1..5`)
+- `shadow`: preflight + fazy SHADOW (`phase_shadow_1_watcher`, `phase_shadow_2_sync_files`, `phase_shadow_3_gcode_runtime`)
+- `all`: preflight + wszystkie fazy funkcjonalne (`1..5` + fazy SHADOW)
 
 `phase_6_cleanup` uruchamia się zawsze na końcu.
 
@@ -86,7 +86,7 @@ python3 integration_tests/test_runner.py \
 - `--skip-target-check` - pomija walidację markera `.cnc_target`.
 - `--skip-remote-refresh` - pomija etap zdalnego odświeżenia CI w preflight.
 - `--remote-refresh-timeout 300` - timeout dla pull/install/setup.
-- `--remote-selftest-timeout 180` - timeout dla `cnc_selftest`.
+- `--remote-selftest-timeout 180` - timeout dla selftest v2.
 - `--disable-selftest-auto-repair` - wyłącza jednorazową auto-naprawę SHADOW LUN.
 - `--switch-timeout 90` - timeout oczekiwania na przełączenie NET/USB.
 - `--usb-host-mount /Volumes/CNC_USB` - lokalna ścieżka montowania pamięci gadget na maszynie DEV; włącza bezpośredni test odczytu host-side w fazie USB.
@@ -109,7 +109,7 @@ Raport zawiera:
 - Błąd `git pull --ff-only`: lokalne zmiany/konflikt na RPi.
 - Brak `sudo -n`: setup usług lub `journalctl` nie może się wykonać.
 - `systemctl is-active` != `active`: runner przerywa testy.
-- Wpisy CNC w `journalctl -p 3 -n 20`: runner traktuje to jako błąd wdrożenia.
+- `critical > 0` w selftest v2: runner traktuje to jako błąd wdrożenia.
 - Brak `--smb-share` dla `--mode all` lub `--mode smb`: błąd walidacji argumentów.
 
 ## Bezpieczeństwo

@@ -110,14 +110,15 @@ Po wypchnięciu zmian na serwer:
 CODEX łączy się przez SSH z jednym z testowych Raspberry Pi:
 
 - `ssh cnc@192.168.7.139`
-- `ssh andrzej@192.168.7.110`
+- `ssh cnc@192.168.7.110`
+- hasło: cnc
 
 Następnie:
 
 - przechodzi do katalogu repozytorium `cnc-control`,
 - wykonuje `git pull`,
 - aktualizuje środowisko (jeśli wymagane),
-- uruchamia odpowiednie skrypty (`usb_mode.sh`, `net_mode.sh`, `status.sh`),
+- uruchamia odpowiednie skrypty (`tools/shadow_usb_export.sh`, `status.sh`),
 - przeprowadza testy diagnostyczne,
 - weryfikuje konfigurację systemową oraz usługi systemd.
 

@@ -18,9 +18,8 @@ LOG_FILE_PATH = os.environ.get("CNC_LED_LOG", "/var/log/cnc-control/led.log")
 
 class LedMode(Enum):
     BOOT = auto()
-    USB = auto()
-    UPLOAD = auto()
-    SHADOW_PENDING = auto()
+    SHADOW_READY = auto()
+    SHADOW_SYNC = auto()
     AP = auto()
     ERROR = auto()
     IDLE = auto()
@@ -34,9 +33,8 @@ class _LedPattern:
 
 MODE_PATTERNS: Dict[LedMode, _LedPattern] = {
     LedMode.BOOT: _LedPattern((255, 180, 0), 0.0),
-    LedMode.USB: _LedPattern((255, 0, 0), 0.0),
-    LedMode.UPLOAD: _LedPattern((0, 255, 0), 0.0),
-    LedMode.SHADOW_PENDING: _LedPattern((0, 0, 255), 0.0),
+    LedMode.SHADOW_READY: _LedPattern((0, 255, 0), 0.0),
+    LedMode.SHADOW_SYNC: _LedPattern((0, 0, 255), 0.0),
     LedMode.AP: _LedPattern((0, 0, 255), 1.0),
     LedMode.ERROR: _LedPattern((255, 0, 0), 3.0),
     LedMode.IDLE: _LedPattern((76, 76, 76), 0.0),
@@ -217,8 +215,17 @@ def _read_mode_file(path: str) -> Optional[LedMode]:
     if not raw_value:
         return None
 
+    # PL: Mapa kompatybilnosci dla historycznych nazw trybow LED.
+    # EN: Backward-compatibility map for historical LED mode names.
+    legacy_aliases = {
+        "USB": "SHADOW_READY",
+        "UPLOAD": "SHADOW_READY",
+        "SHADOW_PENDING": "SHADOW_SYNC",
+    }
+    normalized_value = legacy_aliases.get(raw_value, raw_value)
+
     try:
-        return LedMode[raw_value]
+        return LedMode[normalized_value]
     except KeyError:
         _LOGGER.warning("Nieznany tryb LED w pliku IPC: %s", raw_value)
         return None

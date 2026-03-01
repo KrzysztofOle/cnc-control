@@ -25,12 +25,11 @@ The project is developed as a **practical workshop-oriented solution**, not as a
 > ⚠️ The project **does not interfere** with RichAuto controller PLC logic.  
 > It acts solely as a supporting system.
 
-## 📣 Mode Status
+## 📣 Operating Mode (SHADOW-only)
 
-- `SHADOW` is the current and recommended operating mode.
-- `NET/USB` switching (`net_mode.sh` / `usb_mode.sh`) is **legacy**.
-- `NET/USB` mode is being gradually phased out and kept only for backward compatibility.
-- Target mode specification: `docs/SHADOW_MODE.md`.
+- The project runs exclusively in `SHADOW` mode.
+- The runtime flow is based on `CNC_MASTER_DIR` and USB image slots (`CNC_USB_IMG_A` / `CNC_USB_IMG_B`).
+- Detailed specification: `docs/SHADOW_MODE.md`.
 
 ---
 
@@ -60,6 +59,7 @@ The project is developed as a **practical workshop-oriented solution**, not as a
 - 🐍 Python 3.9+
 - 📦 pip / venv
 - 🔧 Git
+- 🧰 SHADOW packages: `dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`
 
 Optional:
 - Samba / FTP
@@ -69,12 +69,8 @@ Optional:
 
 ## 🚀 Installation
 
-```bash
-git clone https://github.com/<your-user>/cnc-control.git
-cd cnc-control
-
-python3 tools/bootstrap_env.py --target rpi
-```
+Preferred Raspberry Pi setup uses the system bootstrap script (`tools/bootstrap_cnc.sh`).
+Use `bootstrap_env.py` mainly when you only need to prepare a Python virtual environment.
 
 For a developer machine:
 
@@ -113,11 +109,32 @@ Optionally, you can set the installation user explicitly:
 CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 ```
 
+### Installation from another branch
+
+```bash
+cd ~
+wget https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+./bootstrap_cnc.sh --branch <branch-name>
+```
+
+Branch selection priority:
+- `--branch <branch-name>`
+- `CNC_GIT_BRANCH=<branch-name>`
+- default `main`
+
 The script automatically:
 - updates the system (`apt update/upgrade`),
-- creates `.venv` and installs dependencies from `pyproject.toml` (with an attempted `rpi-ws281x` extra),
+- installs SHADOW runtime packages (`dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`),
+- creates `.venv` and runs `pip install --editable ".[rpi]"`,
 - clones/updates the `cnc-control` repository over HTTPS,
-- runs `setup_system.sh`, `setup_commands.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+- runs `setup_system.sh`, `setup_nmtui.sh`, `setup_webui.sh`, `setup_usb_service.sh`, `setup_led_service.sh`.
+
+After first-time installation, reboot the Raspberry Pi:
+
+```bash
+sudo reboot
+```
 
 Optional user and repo directory override:
 
@@ -157,24 +174,69 @@ The tag description is displayed in the WebUI.
 
 ---
 
-## ⌨️ Shortcut Commands (CLI)
-
-For backward compatibility, shortcut commands are still available (`usb_mode`, `net_mode`, `status`, `cnc_selftest`):
+## ⌨️ CLI Tools (Diagnostics)
 
 ```bash
-chmod +x tools/setup_commands.sh
-./tools/setup_commands.sh
+./status.sh
+./tools/shadow_usb_export.sh
+./tools/cnc_selftest.sh
+./tools/cnc_selftest.sh --verbose
+./tools/cnc_selftest.sh --json
+./tools/cnc_install_validation.sh
+./tools/cnc_install_validation.sh --json
+./tools/cnc_install_validation.sh --strict
 ```
 
-The script creates links to `usb_mode.sh`, `net_mode.sh`, `status.sh`, `tools/cnc_selftest.sh` and, if needed, adds `~/.local/bin` to `PATH` (in `~/.bashrc` and `~/.zshrc`). For new deployments, use `SHADOW`.
+## 🧪 Selftest v2 (Python, SHADOW-only)
 
-## Diagnostics
+### 1) Architecture
 
-```bash
-cnc_selftest
-cnc_selftest --verbose
-cnc_selftest --json
+- `cnc-selftest` is a Python entrypoint: `cnc_control.selftest.cli`.
+- `tools/cnc_selftest.sh` is only a thin CLI wrapper that calls the Python module.
+- Journal parsing has a single implementation (`cnc_control.selftest.journal`) with no duplicate parser in the integration runner.
+- Classification does not use hostname-based substring heuristics.
+
+### 2) JSON Contract
+
+Example payload:
+
+```json
+{
+  "status": "OK|FAILED",
+  "critical": 0,
+  "warnings": 2,
+  "system_noise": 8,
+  "details": {}
+}
 ```
+
+Field meaning:
+
+| Field | Meaning |
+|---|---|
+| `critical` | SHADOW specification violation (CI-blocking). |
+| `warnings` | Non-critical diagnostic issues. |
+| `system_noise` | System-level errors not directly related to CNC. |
+| `status` | `FAILED` only when `critical > 0`. |
+
+### 3) Exit code
+
+- exit `0` -> `critical == 0`
+- exit `1` -> `critical > 0`
+- `warnings` and `system_noise` do not block CI
+
+## tools/cnc_install_validation.sh
+
+System installation validator for SHADOW-only mode (read-only checks, no system modifications).
+
+Modes:
+- default: human-readable text report,
+- `--json`: JSON report,
+- `--strict`: FAIL when any WARN appears.
+
+Exit code:
+- `0` = PASS,
+- `1` = FAIL.
 
 ---
 
@@ -210,8 +272,8 @@ Mode mapping:
 | Mode | Color | Behavior |
 |---|---|---|
 | `BOOT` | yellow `(255, 180, 0)` | steady |
-| `USB` | red `(255, 0, 0)` | steady |
-| `UPLOAD` | green `(0, 255, 0)` | steady |
+| `SHADOW_READY` | green `(0, 255, 0)` | steady |
+| `SHADOW_SYNC` | blue `(0, 0, 255)` | steady |
 | `AP` | blue `(0, 0, 255)` | blinking `1 Hz` |
 | `ERROR` | red `(255, 0, 0)` | fast blink `3 Hz` |
 | `IDLE` | dim white `(76, 76, 76)` | steady |
@@ -241,9 +303,34 @@ Minimal sudoers (file `/etc/sudoers.d/cnc-wifi`):
 ```bash
 andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli *
 andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl stop cnc-ap.service
+andrzej ALL=(root) NOPASSWD: /usr/bin/hostnamectl set-hostname *
+andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl restart avahi-daemon
 ```
 
 Helper script used by WebUI: `tools/wifi_control.sh`.
+
+### Change Raspberry Pi Hostname from WebUI
+
+The `System` tab now contains a `Raspberry Pi hostname` section.
+
+- the field accepts an operator-friendly label (for example `CNC_USB`),
+- WebUI stores:
+  - `pretty hostname` unchanged (`CNC_USB`),
+  - `static hostname` in Linux/mDNS format (`cnc-usb`),
+- after save, the UI shows the active `mDNS` address (for example `cnc-usb.local`).
+
+### ZeroTier from WebUI
+
+The `ZeroTier` panel in the `System` tab supports:
+- service state toggle (`ON/OFF`),
+- adding the ZeroTier service with the `Add service` action,
+- optional `Network ID` input (16 hex chars) to run `join` immediately.
+
+To allow installation from WebUI, add sudo permission for the setup script:
+
+```bash
+andrzej ALL=(root) NOPASSWD: /usr/bin/bash /home/andrzej/cnc-control/tools/setup_zerotier.sh *
+```
 
 ### AP Mode Lock
 
@@ -279,7 +366,7 @@ Configuration is centrally managed via:
 /etc/cnc-control/cnc-control.env
 ```
 
-This file is loaded by systemd (`EnvironmentFile=`), SHADOW/WebUI logic, and compatibility scripts (`net_mode.sh`, `usb_mode.sh`). Missing file or required variables cause explicit errors.
+This file is loaded by systemd (`EnvironmentFile=`), SHADOW/WebUI logic, and diagnostic tooling. Missing file or required variables cause explicit errors.
 
 Quick start:
 
@@ -289,28 +376,34 @@ sudo cp config/cnc-control.env.example /etc/cnc-control/cnc-control.env
 sudo nano /etc/cnc-control/cnc-control.env
 ```
 
-Required variables (no defaults):
+Required variables for SHADOW-only mode:
 
 | Variable | Description | Default | Usage |
 |---|---|---|---|
-| `CNC_USB_IMG` | Path to USB Mass Storage image | none (required) | `net_mode.sh`, `usb_mode.sh` (legacy) |
-| `CNC_MOUNT_POINT` | Image mount point (G-code upload) | none (required) | `net_mode.sh`, `usb_mode.sh` (legacy) |
-| `CNC_UPLOAD_DIR` | WebUI upload directory | none (required) | `webui/app.py` |
+| `CNC_SHADOW_ENABLED` | SHADOW mode flag (set `true`) | `true` | `webui/app.py`, `tools/cnc_selftest.sh` |
+| `CNC_MASTER_DIR` | SHADOW working directory (file source) | `/var/lib/cnc-control/master` | `shadow/watcher_service.py`, `shadow/rebuild_engine.py` |
+| `CNC_USB_IMG_A` | USB image path for slot A | `/var/lib/cnc-control/cnc_usb_a.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_USB_IMG_B` | USB image path for slot B | `/var/lib/cnc-control/cnc_usb_b.img` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
 
 Optional variables:
 
 | Variable | Description | Default | Usage |
 |---|---|---|---|
-| `CNC_NET_MODE_SCRIPT` | Path to network mode script (legacy) | `<repo>/net_mode.sh` | `webui/app.py` |
-| `CNC_USB_MODE_SCRIPT` | Path to USB mode script (legacy) | `<repo>/usb_mode.sh` | `webui/app.py` |
-| `CNC_CONTROL_REPO` | Repository path (for `git pull`) | `/home/andrzej/cnc-control` | `webui/app.py` |
+| `CNC_CONTROL_REPO` | Repository path (for `git pull`) | `/home/cnc/cnc-control` | `webui/app.py` |
 | `CNC_WEBUI_LOG` | WebUI log file path | `/var/log/cnc-control/webui.log` | `webui/app.py` |
 | `CNC_WEBUI_SYSTEMD_UNIT` | systemd unit name for webui | `cnc-webui.service` | `webui/app.py` |
 | `CNC_WEBUI_LOG_SINCE` | Time range for `journalctl` (e.g. `24 hours ago`) | `24 hours ago` | `webui/app.py` |
 | `CNC_AP_BLOCK_FLAG` | Path to temporary AP block flag file | `/dev/shm/cnc-ap-blocked.flag` | `webui/app.py`, `tools/wifi_fallback.sh` |
 | `CNC_AP_ENABLED` | Global AP switch (`true`/`false`) | `false` | `webui/app.py` |
-| `CNC_USB_LABEL` | FAT volume label visible on USB host (max 11 chars) | `CNC_USB` | `net_mode.sh`, `usb_mode.sh`, `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
-| `CNC_USB_MOUNT` | Legacy: USB mount point | none | `net_mode.sh`, `usb_mode.sh`, `status.sh` |
+| `CNC_USB_LABEL` | FAT volume label visible on USB host (max 11 chars) | `CNC_USB` | `tools/setup_system.sh`, `shadow/rebuild_engine.py` |
+| `CNC_ACTIVE_SLOT_FILE` | Active slot file (`A`/`B`) | `/var/lib/cnc-control/shadow_active_slot.state` | `shadow/slot_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_SHADOW_STATE_FILE` | SHADOW state file (JSON) | `/var/lib/cnc-control/shadow_state.json` | `shadow/state_store.py`, `webui/app.py` |
+| `CNC_SHADOW_HISTORY_FILE` | SHADOW rebuild history file | `/var/lib/cnc-control/shadow_history.json` | `shadow/shadow_manager.py`, `webui/app.py` |
+| `CNC_SHADOW_LOCK_FILE` | SHADOW rebuild lock file path | `/var/run/cnc-shadow.lock` | `shadow/lock_manager.py`, `tools/cnc_selftest.sh` |
+| `CNC_SHADOW_DEBOUNCE_SECONDS` | Event debounce delay for watcher | `4` | `shadow/shadow_manager.py` |
+| `CNC_SHADOW_SLOT_SIZE_MB` | USB slot image size | `256` | `shadow/rebuild_engine.py` |
+| `CNC_SHADOW_TMP_SUFFIX` | Temporary suffix for rebuild files | `.tmp` | `shadow/rebuild_engine.py`, `shadow/slot_manager.py` |
+| `CNC_SHADOW_HISTORY_LIMIT` | Rebuild history entry limit | `50` | `shadow/shadow_manager.py` |
 
 ---
 
@@ -325,15 +418,13 @@ cnc-control/
 ├── config/
 ├── led_status.py
 ├── led_status_cli.py
-├── net_mode.sh
 ├── status.sh
-├── usb_mode.sh
 ├── tools/
-│   ├── setup_commands.sh
 │   ├── setup_led_service.sh
 │   ├── setup_usb_service.sh
 │   ├── setup_webui.sh
 │   ├── setup_nmtui.sh
+│   ├── shadow_usb_export.sh
 │   └── setup_zerotier.sh
 └── webui/
     └── app.py
@@ -351,17 +442,16 @@ cnc-control/
 | `config/cnc-control.env.example` | Example central configuration (EnvironmentFile). |
 | `led_status.py` | WS2812 LED daemon (GPIO18) monitoring IPC and driving LED state. |
 | `led_status_cli.py` | CLI for LED mode IPC writes (`/tmp/cnc_led_mode`). |
-| `net_mode.sh` | Legacy: switches network mode (host/gadget). |
 | `status.sh` | Quick status view of the system/connections. |
-| `usb_mode.sh` | Legacy: switches USB mode for Raspberry Pi. |
 | `tools/` | Helper scripts for environment setup. |
-| `tools/setup_commands.sh` | Installs shortcut commands (`usb_mode` and `net_mode` as legacy) and `status`. |
+| `tools/shadow_usb_export.sh` | Starts SHADOW USB export based on the active slot. |
 | `tools/setup_led_service.sh` | Configures `cnc-led.service` for `led_status.py`. |
-| `tools/setup_usb_service.sh` | Configures `cnc-usb.service` for `usb_mode.sh`. |
+| `tools/setup_usb_service.sh` | Configures `cnc-usb.service` for SHADOW export. |
 | `tools/setup_webui.sh` | Configures `cnc-webui.service` for webui. |
 | `tools/setup_nmtui.sh` | Installs and launches `nmtui`. |
 | `tools/setup_zerotier.sh` | Configures the ZeroTier client. |
 | `tools/wifi_control.sh` | Helper script for Wi-Fi scan/connect (`nmcli`). |
+| `tools/cnc_install_validation.sh` | SHADOW-only system install validation (packages, env, slots, state, systemd, g_mass_storage, LUN). |
 | `webui/` | Simple web UI for tool access. |
 | `webui/app.py` | Web application (server) for webui. |
 

@@ -12,7 +12,7 @@ if command -v readlink >/dev/null 2>&1; then
 else
     REPO_ROOT="${REPO_ROOT_INPUT}"
 fi
-USB_SCRIPT="${REPO_ROOT}/usb_mode.sh"
+USB_SCRIPT="${REPO_ROOT}/tools/shadow_usb_export.sh"
 
 if ! command -v systemctl >/dev/null 2>&1; then
     echo "Brak systemd (systemctl)."
@@ -29,7 +29,7 @@ SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 UDC_PATH="/sys/class/udc"
 
 SERVICE_CONTENT="[Unit]
-Description=CNC USB Mode (RichAuto)
+Description=CNC SHADOW USB Export Service
 After=multi-user.target network.target
 
 [Service]
