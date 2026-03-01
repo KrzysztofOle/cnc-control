@@ -46,3 +46,4 @@ Thumbs.db
 # Test artifacts
 # ===============================
 integration_tests/report.json
+integration_tests/report*.json
