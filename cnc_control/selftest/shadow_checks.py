@@ -122,7 +122,16 @@ def _check_mount_ro(
     image_path: Path,
     mount_path: Path,
 ) -> None:
-    mount_path.mkdir(parents=True, exist_ok=True)
+    try:
+        mount_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _add_critical(
+            result,
+            name=f"Mount RO validation {image_path.name}",
+            status="FAIL",
+            detail=f"Cannot prepare mount path {mount_path}: {exc}",
+        )
+        return
     mount_result = _run_command(
         ["mount", "-o", "loop,ro", "-t", "vfat", str(image_path), str(mount_path)],
         use_sudo=True,
