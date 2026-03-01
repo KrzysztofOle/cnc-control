@@ -742,7 +742,8 @@ Dozwolony katalog kodów błędów:
 - `ERR_RUN_ID_OVERFLOW`,
 - `ERR_CONFIG_VERSION`,
 - `ERR_MISSING_DEPENDENCY`,
-- `ERR_LOCK_CONFLICT`.
+- `ERR_LOCK_CONFLICT`,
+- `ERR_MISSING_SUDO`.
 
 Reguła katalogu:
 - użycie kodu spoza powyższej listy jest niedozwolone,
