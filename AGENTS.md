@@ -194,6 +194,80 @@ systemctl is-active cnc-led
 
 ---
 
+## Obsługa stanu Git na Raspberry Pi (branch / detached HEAD)
+
+Przed wykonaniem jakiejkolwiek aktualizacji, walidacji lub testu na Raspberry Pi
+należy bezwzględnie zweryfikować stan repozytorium Git.
+
+### 1. Sprawdzenie aktualnego stanu
+
+Wykonać:
+
+```bash
+git rev-parse --abbrev-ref HEAD
+```
+
+Możliwe wyniki:
+- `main` -> repozytorium jest na gałęzi (stan prawidłowy),
+- inna gałąź -> upewnić się, że jest to zamierzony stan,
+- `HEAD` -> repozytorium znajduje się w stanie detached HEAD (np. po checkout taga).
+
+---
+
+### 2. Postępowanie w stanie detached HEAD
+
+Jeżeli wynik to `HEAD`:
+- NIE wykonywać `git pull`,
+- NIE kontynuować standardowej procedury aktualizacji,
+- zalogować komunikat: `Repozytorium w stanie detached HEAD`.
+
+Stan detached HEAD jest prawidłowy przy testach wersji oznaczonej tagiem.
+
+W takim przypadku:
+- NIE przełączać na `main`,
+- NIE wykonywać `git pull`,
+- kontynuować testy bez odświeżania zdalnego repozytorium.
+
+---
+
+### 3. Standardowa procedura aktualizacji (praca na gałęzi)
+
+W trybie branch-based (np. `main`):
+
+```bash
+git checkout main
+git pull --ff-only
+source .venv/bin/activate
+pip install --editable ".[rpi]"
+```
+
+---
+
+### 4. Procedura testów wersji z taga
+
+Jeżeli system został zainstalowany z taga:
+- nie wykonywać `git pull`,
+- nie zmieniać gałęzi,
+- zweryfikować commit:
+
+```bash
+git rev-parse HEAD
+```
+
+To zapewnia deterministyczny test wersji release.
+
+---
+
+### 5. Zasada bezpieczeństwa CI
+
+Jeżeli `git pull --ff-only` zakończy się błędem
+(np. z powodu detached HEAD):
+- przerwać sekwencję testową,
+- nie kontynuować w stanie częściowej aktualizacji,
+- jednoznacznie zalogować przyczynę.
+
+---
+
 ### 4️⃣ Warunki sukcesu wdrożenia
 
 Wdrożenie uznaje się za poprawne, gdy:
