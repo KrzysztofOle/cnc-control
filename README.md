@@ -315,6 +315,19 @@ W zakladce `System` dostepna jest sekcja `Nazwa Raspberry Pi`.
   - `static hostname` w formacie Linux/mDNS (`cnc-usb`),
 - po zmianie nazwy pokazany jest aktualny adres `mDNS` (np. `cnc-usb.local`).
 
+### ZeroTier z WebUI
+
+W zakladce `System` panel `ZeroTier` umozliwia:
+- wlaczanie/wylaczanie uslugi (`ON/OFF`),
+- dodanie uslugi ZeroTier przez przycisk `Dodaj usluge`,
+- opcjonalne podanie `Network ID` (16 znakow hex), aby od razu wykonac `join`.
+
+Aby instalacja dzialala z poziomu WebUI, dodaj uprawnienie sudo dla skryptu:
+
+```bash
+andrzej ALL=(root) NOPASSWD: /usr/bin/bash /home/andrzej/cnc-control/tools/setup_zerotier.sh *
+```
+
 ### Blokada trybu AP
 
 Zmienna `CNC_AP_ENABLED` domyslnie ma wartosc `false`.

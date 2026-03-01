@@ -94,3 +94,67 @@ def test_api_zerotier_status_returns_200_when_service_is_missing(monkeypatch) ->
     assert payload["enabled"] is False
     assert payload["available"] is False
     assert payload["error"] == "Brak usługi ZeroTier"
+
+
+def test_api_zerotier_toggle_returns_409_when_service_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        webui_app,
+        "read_zerotier_state",
+        lambda: (None, None, "Brak usługi ZeroTier"),
+    )
+    client = webui_app.app.test_client()
+
+    response = client.post("/api/zerotier", json={"enabled": True})
+    payload = response.get_json()
+
+    assert response.status_code == 409
+    assert "Brak usługi ZeroTier" in payload["error"]
+
+
+def test_api_zerotier_setup_rejects_invalid_network_id() -> None:
+    client = webui_app.app.test_client()
+
+    response = client.post("/api/zerotier/setup", json={"network_id": "bad"})
+    payload = response.get_json()
+
+    assert response.status_code == 400
+    assert "Nieprawidłowy Network ID" in payload["error"]
+
+
+def test_api_zerotier_setup_returns_error_when_script_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(webui_app, "ZEROTIER_SETUP_SCRIPT", "/tmp/missing_setup_zerotier.sh")
+    client = webui_app.app.test_client()
+
+    response = client.post("/api/zerotier/setup", json={"network_id": ""})
+    payload = response.get_json()
+
+    assert response.status_code == 500
+    assert payload["error"] == "Brak skryptu setup_zerotier.sh"
+
+
+def test_api_zerotier_setup_installs_and_returns_status(monkeypatch) -> None:
+    monkeypatch.setattr(webui_app, "ZEROTIER_SETUP_SCRIPT", str(REPO_ROOT / "tools" / "setup_zerotier.sh"))
+    monkeypatch.setattr(
+        webui_app,
+        "run_command_with_sudo_fallback",
+        lambda command, timeout=10: (make_result(0, "ok\n"), None),
+    )
+    monkeypatch.setattr(
+        webui_app,
+        "read_zerotier_state",
+        lambda: (True, True, None),
+    )
+    client = webui_app.app.test_client()
+
+    response = client.post(
+        "/api/zerotier/setup",
+        json={"network_id": "8056c2e21c000001"},
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["network_id"] == "8056c2e21c000001"
+    assert payload["active"] is True
+    assert payload["enabled"] is True
+    assert payload["available"] is True

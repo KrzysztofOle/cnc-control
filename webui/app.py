@@ -107,8 +107,13 @@ ZEROTIER_SERVICE = os.environ.get(
     "CNC_ZEROTIER_SERVICE",
     "zerotier-one",
 )
+ZEROTIER_SETUP_SCRIPT = os.environ.get(
+    "CNC_ZEROTIER_SETUP_SCRIPT",
+    os.path.join(REPO_ROOT, "tools", "setup_zerotier.sh"),
+)
 APP_VERSION_FILE = os.path.join(CONTROL_REPO_DIR, ".app_version")
 SEMVER_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+].*)?$")
+ZEROTIER_NETWORK_ID_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 HIDDEN_NAMES = {
     ".Spotlight-V100",
     ".fseventsd",
@@ -385,6 +390,11 @@ button:disabled {
 .zerotier-description {
   font-size: 13px;
   color: #555555;
+}
+
+.zerotier-network-id {
+  width: 220px;
+  max-width: 100%;
 }
 
 .zerotier-status {
@@ -732,6 +742,12 @@ body.ui-busy #loading-overlay * {
   </div>
   <div class="zerotier-description">ON – zdalny dostęp aktywny</div>
   <div class="zerotier-description">OFF – zdalny dostęp wyłączony</div>
+  <div class="zerotier-row">
+    <label for="zerotier-network-id">Network ID</label>
+    <input type="text" id="zerotier-network-id" class="zerotier-network-id" maxlength="16" placeholder="opcjonalnie: 16 znaków hex" autocomplete="off" spellcheck="false">
+    <button type="button" id="zerotier-install">Dodaj usługę</button>
+  </div>
+  <div class="zerotier-description">Dodaje usługę ZeroTier; opcjonalny Network ID od razu wykona join.</div>
   <div id="zerotier-result" class="zerotier-status zerotier-status-muted"></div>
 </div>
 
@@ -2042,6 +2058,11 @@ body.ui-busy #loading-overlay * {
     }
     const stateLabel = document.getElementById("zerotier-state");
     const resultLabel = document.getElementById("zerotier-result");
+    const installButton = document.getElementById("zerotier-install");
+    const networkIdInput = document.getElementById("zerotier-network-id");
+    let toggleBusy = false;
+    let setupBusy = false;
+    let toggleForceDisabled = false;
 
     function setResult(text, level) {
       if (!resultLabel) {
@@ -2087,11 +2108,28 @@ body.ui-busy #loading-overlay * {
       }
     }
 
+    function updateZeroTierControlsState() {
+      toggle.disabled = toggleBusy || setupBusy || toggleForceDisabled;
+      if (installButton) {
+        installButton.disabled = toggleBusy || setupBusy;
+      }
+      if (networkIdInput) {
+        networkIdInput.disabled = toggleBusy || setupBusy;
+      }
+    }
+
     function setToggleBusy(isBusy) {
-      toggle.disabled = isBusy;
+      toggleBusy = Boolean(isBusy);
+      updateZeroTierControlsState();
+    }
+
+    function setSetupBusy(isBusy) {
+      setupBusy = Boolean(isBusy);
+      updateZeroTierControlsState();
     }
 
     async function refreshZeroTier() {
+      setToggleBusy(true);
       try {
         const response = await fetch("/api/zerotier", {
           method: "GET",
@@ -2105,10 +2143,11 @@ body.ui-busy #loading-overlay * {
         if (!payload || typeof payload.active !== "boolean") {
           throw new Error("Nieprawidłowa odpowiedź z API.");
         }
-        toggle.checked = Boolean(payload.active);
+        toggleForceDisabled = payload.available === false;
+        toggle.checked = Boolean(payload.active) && !toggleForceDisabled;
         setState(
-          payload.active ? "Status: aktywny" : "Status: wyłączony",
-          payload.active ? "ok" : "off",
+          toggle.checked ? "Status: aktywny" : "Status: wyłączony",
+          toggle.checked ? "ok" : "off",
         );
         if (payload.available === false && payload.error) {
           setResult(payload.error, "off");
@@ -2116,16 +2155,25 @@ body.ui-busy #loading-overlay * {
           setResult("", "muted");
         }
       } catch (error) {
+        toggleForceDisabled = false;
         setState("Status: błąd", "error");
         setResult(error.message || "Błąd pobierania stanu.", "error");
+      } finally {
+        setToggleBusy(false);
       }
     }
 
     async function applyZeroTier(enabled) {
-      if (busy) {
+      if (busy || setupBusy || toggleForceDisabled) {
+        toggle.checked = !enabled;
+        if (toggleForceDisabled) {
+          toggle.checked = false;
+          setResult("Brak usługi ZeroTier. Użyj przycisku Dodaj usługę.", "off");
+        }
         return;
       }
       setToggleBusy(true);
+      setSetupBusy(true);
       setResult("Aktualizacja...", "muted");
       try {
         const response = await fetch("/api/zerotier", {
@@ -2161,6 +2209,72 @@ body.ui-busy #loading-overlay * {
         setResult(error.message || "Błąd zmiany stanu ZeroTier.", "error");
         setState("Status: błąd", "error");
       } finally {
+        setSetupBusy(false);
+        setToggleBusy(false);
+      }
+    }
+
+    async function installZeroTier() {
+      if (busy || toggleBusy || setupBusy) {
+        return;
+      }
+      const networkId = networkIdInput ? networkIdInput.value.trim() : "";
+      if (networkId && !/^[0-9a-fA-F]{16}$/.test(networkId)) {
+        setResult("Nieprawidłowy Network ID (wymagane 16 znaków hex).", "error");
+        return;
+      }
+
+      setSetupBusy(true);
+      setToggleBusy(true);
+      setResult("Instalacja ZeroTier...", "muted");
+      try {
+        const response = await fetch("/api/zerotier/setup", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ network_id: networkId }),
+        });
+        if (!response.ok) {
+          let message = "Nie udało się dodać usługi ZeroTier.";
+          try {
+            const payload = await response.json();
+            if (payload && payload.error) {
+              message = payload.error;
+            }
+          } catch (payloadError) {
+            message = message + " (HTTP " + response.status + ").";
+          }
+          throw new Error(message);
+        }
+
+        const payload = await response.json();
+        const isOn = Boolean(payload && payload.active);
+        toggleForceDisabled = payload && payload.available === false;
+        toggle.checked = isOn && !toggleForceDisabled;
+        setState(
+          toggle.checked ? "Status: aktywny" : "Status: wyłączony",
+          toggle.checked ? "ok" : "off",
+        );
+        if (networkIdInput && payload && typeof payload.network_id === "string") {
+          networkIdInput.value = payload.network_id;
+        }
+
+        let message = "Usługa ZeroTier została dodana.";
+        if (payload && payload.message) {
+          message = payload.message;
+        }
+        if (payload && payload.warning) {
+          message = message + " " + payload.warning;
+          setResult(message, "off");
+        } else {
+          setResult(message, "ok");
+        }
+      } catch (error) {
+        setResult(error.message || "Błąd dodawania usługi ZeroTier.", "error");
+      } finally {
+        setSetupBusy(false);
         setToggleBusy(false);
       }
     }
@@ -2168,6 +2282,19 @@ body.ui-busy #loading-overlay * {
     toggle.addEventListener("change", () => {
       applyZeroTier(toggle.checked);
     });
+
+    if (installButton) {
+      installButton.addEventListener("click", installZeroTier);
+    }
+    if (networkIdInput) {
+      networkIdInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        installZeroTier();
+      });
+    }
 
     refreshZeroTier();
   }
@@ -2812,6 +2939,30 @@ def read_zerotier_state():
     return active, enabled, None
 
 
+def normalize_zerotier_network_id(value):
+    if value is None:
+        return "", None
+    if not isinstance(value, str):
+        return None, "Pole network_id musi być typu string"
+
+    normalized = value.strip()
+    if not normalized:
+        return "", None
+    if not ZEROTIER_NETWORK_ID_RE.fullmatch(normalized):
+        return None, "Nieprawidłowy Network ID (oczekiwane 16 znaków hex)"
+    return normalized.lower(), None
+
+
+def setup_zerotier_service(network_id):
+    if not os.path.isfile(ZEROTIER_SETUP_SCRIPT):
+        return None, "Brak skryptu setup_zerotier.sh"
+
+    command = ["bash", ZEROTIER_SETUP_SCRIPT]
+    if network_id:
+        command.append(network_id)
+    return run_command_with_sudo_fallback(command, timeout=180)
+
+
 def run_git_command(args, cwd, label):
     result = subprocess.run(
         args,
@@ -3220,6 +3371,12 @@ def api_zerotier_toggle():
     if not isinstance(enabled, bool):
         return jsonify({"error": "Pole enabled musi być typu boolean"}), 400
 
+    _active, _enabled, state_error = read_zerotier_state()
+    if state_error:
+        if state_error == "Brak usługi ZeroTier":
+            return jsonify({"error": "Brak usługi ZeroTier. Użyj przycisku Dodaj usługę."}), 409
+        return jsonify({"error": state_error}), 500
+
     if enabled:
         result, error = run_systemctl_command(["enable", ZEROTIER_SERVICE], timeout=10)
         if error:
@@ -3262,6 +3419,49 @@ def api_zerotier_toggle():
             message = f"{message}: {detail}"
         return jsonify({"error": message}), 500
     return jsonify({"status": "off"})
+
+
+@app.route("/api/zerotier/setup", methods=["POST"])
+def api_zerotier_setup():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+
+    network_id, network_error = normalize_zerotier_network_id(payload.get("network_id"))
+    if network_error:
+        return jsonify({"error": network_error}), 400
+
+    result, error = setup_zerotier_service(network_id)
+    if error:
+        return jsonify({"error": error}), 500
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        message = "Nie udało się dodać usługi ZeroTier"
+        if detail:
+            message = f"{message}: {detail}"
+        return jsonify({"error": message}), 500
+
+    active, enabled, state_error = read_zerotier_state()
+    if state_error and state_error != "Brak usługi ZeroTier":
+        return jsonify({"error": state_error}), 500
+
+    response = {
+        "ok": True,
+        "message": (
+            "Usługa ZeroTier została dodana."
+            if not network_id
+            else f"Usługa ZeroTier została dodana. Wysłano join do sieci {network_id}."
+        ),
+        "network_id": network_id or None,
+        "active": bool(active),
+        "enabled": bool(enabled),
+        "available": state_error != "Brak usługi ZeroTier",
+    }
+    if state_error == "Brak usługi ZeroTier":
+        response["warning"] = state_error
+    return jsonify(response)
 
 @app.route("/wifi/scan", methods=["GET"])
 def wifi_scan():

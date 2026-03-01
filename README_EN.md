@@ -319,6 +319,19 @@ The `System` tab now contains a `Raspberry Pi hostname` section.
   - `static hostname` in Linux/mDNS format (`cnc-usb`),
 - after save, the UI shows the active `mDNS` address (for example `cnc-usb.local`).
 
+### ZeroTier from WebUI
+
+The `ZeroTier` panel in the `System` tab supports:
+- service state toggle (`ON/OFF`),
+- adding the ZeroTier service with the `Add service` action,
+- optional `Network ID` input (16 hex chars) to run `join` immediately.
+
+To allow installation from WebUI, add sudo permission for the setup script:
+
+```bash
+andrzej ALL=(root) NOPASSWD: /usr/bin/bash /home/andrzej/cnc-control/tools/setup_zerotier.sh *
+```
+
 ### AP Mode Lock
 
 The `CNC_AP_ENABLED` variable defaults to `false`.
