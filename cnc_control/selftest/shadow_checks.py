@@ -1,13 +1,23 @@
 from __future__ import annotations
 
-import os
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .utils import run_root_command
+
 DEFAULT_ENV_FILE = "/etc/cnc-control/cnc-control.env"
 DEFAULT_VALIDATE_ROOT = "/run/cnc-shadow-validate"
+ERR_MISSING_SUDO = "ERR_MISSING_SUDO"
+ERR_FAT_INVALID = "ERR_FAT_INVALID"
+ERR_REBUILD_TIMEOUT = "ERR_REBUILD_TIMEOUT"
+ERR_LOCK_CONFLICT = "ERR_LOCK_CONFLICT"
+
+SUDO_ERROR_MARKERS = (
+    "a password is required",
+    "permission denied",
+    "sudo:",
+)
 
 
 @dataclass
@@ -70,39 +80,16 @@ def _env_value(env: dict[str, str], key: str, default: str) -> str:
     return value or default
 
 
-def _run_command(command: list[str], *, use_sudo: bool = False) -> subprocess.CompletedProcess[str]:
-    if use_sudo and os.geteuid() != 0:
-        try:
-            sudo_result = subprocess.run(
-                ["sudo", "-n", *command],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError:
-            sudo_result = subprocess.CompletedProcess(
-                args=["sudo", "-n", *command],
-                returncode=127,
-                stdout="",
-                stderr="sudo not available",
-            )
-        if sudo_result.returncode == 0:
-            return sudo_result
+def _is_missing_sudo(stderr: str) -> bool:
+    haystack = stderr.casefold()
+    return any(marker in haystack for marker in SUDO_ERROR_MARKERS)
 
-    try:
-        return subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError as exc:
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=127,
-            stdout="",
-            stderr=str(exc),
-        )
+
+def _error_detail(error_code: str, rc: int, stdout: str, stderr: str) -> str:
+    output = (stderr or stdout or "").strip()
+    if not output:
+        output = "no output"
+    return f"{error_code}; rc={rc}; {output}"
 
 
 def _add_critical(result: ShadowChecksResult, *, name: str, status: str, detail: str) -> None:
@@ -116,57 +103,65 @@ def _add_critical(result: ShadowChecksResult, *, name: str, status: str, detail:
     )
 
 
+def _classify_mount_error(rc: int, stderr: str) -> str:
+    if rc == 124:
+        return ERR_REBUILD_TIMEOUT
+    if _is_missing_sudo(stderr):
+        return ERR_MISSING_SUDO
+    return ERR_FAT_INVALID
+
+
+def _classify_umount_error(rc: int, stderr: str) -> str:
+    if rc == 124:
+        return ERR_REBUILD_TIMEOUT
+    if _is_missing_sudo(stderr):
+        return ERR_MISSING_SUDO
+    return ERR_LOCK_CONFLICT
+
+
 def _check_mount_ro(
     *,
     result: ShadowChecksResult,
     image_path: Path,
-    mount_path: Path,
-) -> None:
-    try:
-        mount_path.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        _add_critical(
-            result,
-            name=f"Mount RO validation {image_path.name}",
-            status="FAIL",
-            detail=f"Cannot prepare mount path {mount_path}: {exc}",
-        )
-        return
-    mount_result = _run_command(
-        ["mount", "-o", "loop,ro", "-t", "vfat", str(image_path), str(mount_path)],
-        use_sudo=True,
+    validate_root: Path,
+) -> bool:
+    mount_rc, mount_out, mount_err = run_root_command(
+        [
+            "mount",
+            "-o",
+            "ro,loop",
+            str(image_path),
+            str(validate_root),
+        ]
     )
-    if mount_result.returncode != 0:
-        detail = (mount_result.stderr or mount_result.stdout or "").strip()
-        if not detail:
-            detail = "mount failed"
+    if mount_rc != 0:
+        error_code = _classify_mount_error(mount_rc, mount_err)
         _add_critical(
             result,
             name=f"Mount RO validation {image_path.name}",
             status="FAIL",
-            detail=detail,
+            detail=_error_detail(error_code, mount_rc, mount_out, mount_err),
         )
-        return
+        return error_code == ERR_MISSING_SUDO
 
-    umount_result = _run_command(["umount", str(mount_path)], use_sudo=True)
-    if umount_result.returncode != 0:
-        detail = (umount_result.stderr or umount_result.stdout or "").strip()
-        if not detail:
-            detail = "umount failed"
+    umount_rc, umount_out, umount_err = run_root_command(["umount", str(validate_root)])
+    if umount_rc != 0:
+        error_code = _classify_umount_error(umount_rc, umount_err)
         _add_critical(
             result,
             name=f"Mount RO validation {image_path.name}",
             status="FAIL",
-            detail=detail,
+            detail=_error_detail(error_code, umount_rc, umount_out, umount_err),
         )
-        return
+        return error_code == ERR_MISSING_SUDO
 
     _add_critical(
         result,
         name=f"Mount RO validation {image_path.name}",
         status="PASS",
-        detail=f"Validated via {mount_path}",
+        detail=f"Validated via {validate_root}",
     )
+    return False
 
 
 def run_shadow_checks(
@@ -252,13 +247,17 @@ def run_shadow_checks(
             detail="No temporary slot artifacts",
         )
 
+    root_blocked = False
     for slot_name, slot_path in slot_paths.items():
         if slot_path.is_file():
-            _check_mount_ro(
+            missing_sudo = _check_mount_ro(
                 result=result,
                 image_path=slot_path,
-                mount_path=validate_dir / f"slot_{slot_name.lower()}",
+                validate_root=validate_dir,
             )
+            if missing_sudo:
+                root_blocked = True
+                break
 
     if active_slot_file.is_file():
         slot_value = active_slot_file.read_text(encoding="utf-8").strip().upper()
@@ -284,23 +283,26 @@ def run_shadow_checks(
             detail=f"Missing file: {active_slot_file}",
         )
 
-    lsmod_result = _run_command(["lsmod"])
-    if lsmod_result.returncode != 0:
-        detail = (lsmod_result.stderr or lsmod_result.stdout or "").strip()
-        if not detail:
-            detail = "lsmod failed"
+    if root_blocked:
+        result.add_check(
+            name="Root command access",
+            status="WARN",
+            severity="WARN",
+            detail="Skipped remaining root operations after ERR_MISSING_SUDO",
+        )
+        return result
+
+    lsmod_rc, lsmod_out, lsmod_err = run_root_command(["lsmod"])
+    if lsmod_rc != 0:
+        error_code = ERR_MISSING_SUDO if _is_missing_sudo(lsmod_err) else ERR_LOCK_CONFLICT
         _add_critical(
             result,
             name="g_mass_storage loaded",
             status="FAIL",
-            detail=detail,
+            detail=_error_detail(error_code, lsmod_rc, lsmod_out, lsmod_err),
         )
     else:
-        modules = {
-            line.split()[0]
-            for line in lsmod_result.stdout.splitlines()
-            if line.split()
-        }
+        modules = {line.split()[0] for line in lsmod_out.splitlines() if line.split()}
         if "g_mass_storage" in modules:
             _add_critical(
                 result,

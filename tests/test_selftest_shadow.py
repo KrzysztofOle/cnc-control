@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+from cnc_control.selftest.core import run_selftest
+from cnc_control.selftest.journal import JournalCheckResult
 from cnc_control.selftest.shadow_checks import run_shadow_checks
 
 
@@ -31,29 +32,13 @@ def test_shadow_missing_slot_a_is_critical(monkeypatch, tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    def fake_run(command, **_kwargs):
+    def fake_root_command(command: list[str], timeout: int = 10) -> tuple[int, str, str]:
+        del timeout
         if command and command[0] == "lsmod":
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="g_mass_storage 0 0\n",
-                stderr="",
-            )
-        if command and command[0] == "sudo":
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="",
-                stderr="",
-            )
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
+            return 0, "g_mass_storage 0 0\n", ""
+        return 0, "", ""
 
-    monkeypatch.setattr("cnc_control.selftest.shadow_checks.subprocess.run", fake_run)
+    monkeypatch.setattr("cnc_control.selftest.shadow_checks.run_root_command", fake_root_command)
 
     result = run_shadow_checks(
         env_file=str(env_file),
@@ -67,7 +52,7 @@ def test_shadow_missing_slot_a_is_critical(monkeypatch, tmp_path: Path) -> None:
     )
 
 
-def test_shadow_mount_path_permission_error_is_critical(monkeypatch, tmp_path: Path) -> None:
+def test_missing_sudo_returns_critical(monkeypatch, tmp_path: Path) -> None:
     master_dir = tmp_path / "master"
     master_dir.mkdir()
     slot_a = tmp_path / "cnc_usb_a.img"
@@ -91,44 +76,19 @@ def test_shadow_mount_path_permission_error_is_critical(monkeypatch, tmp_path: P
         encoding="utf-8",
     )
 
-    original_mkdir = Path.mkdir
+    def fake_root_command(_command: list[str], timeout: int = 10) -> tuple[int, str, str]:
+        del timeout
+        return 1, "", "sudo: a password is required"
 
-    def fake_mkdir(self: Path, *args, **kwargs):
-        if "slot_a" in self.as_posix():
-            raise PermissionError("permission denied")
-        return original_mkdir(self, *args, **kwargs)
-
-    def fake_run(command, **_kwargs):
-        if command and command[0] == "lsmod":
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="g_mass_storage 0 0\n",
-                stderr="",
-            )
-        if command and command[0] == "sudo":
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="",
-                stderr="",
-            )
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
-
-    monkeypatch.setattr("cnc_control.selftest.shadow_checks.Path.mkdir", fake_mkdir)
-    monkeypatch.setattr("cnc_control.selftest.shadow_checks.subprocess.run", fake_run)
-
-    result = run_shadow_checks(
-        env_file=str(env_file),
-        validate_root=str(tmp_path / "validate"),
+    monkeypatch.setattr("cnc_control.selftest.shadow_checks.run_root_command", fake_root_command)
+    monkeypatch.setattr(
+        "cnc_control.selftest.core.run_journal_checks",
+        lambda: JournalCheckResult(critical=0, warnings=0, system_noise=0, checks=[]),
     )
 
-    assert any(
-        check["name"] == "Mount RO validation cnc_usb_a.img" and check["status"] == "FAIL"
-        for check in result.checks
-    )
+    result = run_selftest(env_file=str(env_file))
+
+    assert result.critical == 1
+    assert result.status == "FAILED"
+    shadow_checks = result.details["shadow"]["checks"]
+    assert any("ERR_MISSING_SUDO" in check["detail"] for check in shadow_checks)
