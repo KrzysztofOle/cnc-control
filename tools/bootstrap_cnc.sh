@@ -163,9 +163,17 @@ validate_shadow_env() {
     local env_file="/etc/cnc-control/cnc-control.env"
     local missing=()
     local key=""
+    local syntax_error=""
 
     if [ ! -f "${env_file}" ]; then
         echo "[ERROR] Brak pliku konfiguracji: ${env_file}"
+        exit 1
+    fi
+
+    if ! syntax_error="$(bash -n "${env_file}" 2>&1)"; then
+        echo "[ERROR] Niepoprawna skladnia pliku ${env_file}."
+        echo "[ERROR] Szczegoly parsera bash:"
+        printf '%s\n' "${syntax_error}" | sed 's/^/[ERROR]   /'
         exit 1
     fi
 
