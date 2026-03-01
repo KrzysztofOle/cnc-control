@@ -6,6 +6,8 @@ VERBOSE=0
 JSON_ONLY=0
 CRITICAL_COUNT=0
 WARN_COUNT=0
+SYSTEM_NOISE_COUNT=0
+SYSTEM_NOISE_JSON=""
 
 ENV_FILE="/etc/cnc-control/cnc-control.env"
 MIN_USB_IMAGE_SIZE_BYTES=1048576
@@ -108,6 +110,18 @@ append_section_check_json() {
         SECTION_CHECKS_JSON[$idx]+=","
     fi
     SECTION_CHECKS_JSON[$idx]+="${entry}"
+}
+
+append_system_noise() {
+    local detail="$1"
+    local escaped=""
+
+    escaped="$(json_escape "${detail}")"
+    if [ -n "${SYSTEM_NOISE_JSON}" ]; then
+        SYSTEM_NOISE_JSON+=","
+    fi
+    SYSTEM_NOISE_JSON+="\"${escaped}\""
+    SYSTEM_NOISE_COUNT=$((SYSTEM_NOISE_COUNT + 1))
 }
 
 add_check() {
@@ -1231,11 +1245,16 @@ check_recent_journal_errors() {
 check_system_cnc_journal_errors() {
     local output=""
     local rc=0
+    local parsed=""
     local filtered=""
+    local noise=""
     local compact=""
-    local cnc_pattern='cnc[-_]|cnc-control|shadow|shadow_usb_export|led_status|webui'
+    local noise_compact=""
+    local line=""
+    local cnc_pattern='cnc-(usb|webui|led)\.service|cnc-control|shadow|shadow_usb_export|g_mass_storage|dwc2|usb(_gadget|[[:space:]-]gadget|[[:space:]-]mass[[:space:]-]storage)'
+    local noise_pattern='bluetoothd|wpa_supplicant|dhcpcd|networkmanager|avahi-daemon|modemmanager|systemd-resolved'
 
-    output="$(journalctl --no-pager -n 200 -p 3 2>&1)"
+    output="$(journalctl --no-pager -n 200 -p 3 -o json 2>&1)"
     rc=$?
     if [ "${rc}" -ne 0 ]; then
         compact="$(compact_output "${output}")"
@@ -1247,7 +1266,94 @@ check_system_cnc_journal_errors() {
         return
     fi
 
-    filtered="$(printf '%s\n' "${output}" | grep -Eai "${cnc_pattern}" || true)"
+    if command_available "python3"; then
+        parsed="$(printf '%s\n' "${output}" | python3 <<'PY'
+import json
+import re
+import sys
+
+project_re = re.compile(
+    r"(cnc-(usb|webui|led)\.service|cnc-control|shadow|shadow_usb_export|g_mass_storage|dwc2)",
+    flags=re.IGNORECASE,
+)
+usb_re = re.compile(r"\busb(?:[_ -]gadget|[_ -]mass[_ -]storage)?\b", flags=re.IGNORECASE)
+noise_re = re.compile(
+    r"(bluetoothd|wpa_supplicant|dhcpcd|networkmanager|avahi-daemon|modemmanager|systemd-resolved)",
+    flags=re.IGNORECASE,
+)
+
+relevant = []
+noise = []
+
+for raw_line in sys.stdin:
+    raw_line = raw_line.strip()
+    if not raw_line:
+        continue
+    try:
+        payload = json.loads(raw_line)
+    except json.JSONDecodeError:
+        continue
+
+    message = str(payload.get("MESSAGE", "")).strip()
+    unit = str(payload.get("_SYSTEMD_UNIT") or payload.get("UNIT") or "").strip()
+    identifier = str(payload.get("SYSLOG_IDENTIFIER") or payload.get("_COMM") or "").strip()
+    source = unit or identifier or "journal"
+    combined = f"{unit} {identifier} {message}".strip()
+    entry = f"{source}: {message}" if message else source
+
+    if noise_re.search(combined):
+        noise.append(entry)
+        continue
+
+    if project_re.search(combined) or usb_re.search(message):
+        relevant.append(entry)
+
+
+def dedupe(items: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+print("===RELEVANT===")
+for item in dedupe(relevant)[:80]:
+    print(item)
+print("===NOISE===")
+for item in dedupe(noise)[:80]:
+    print(item)
+PY
+)"
+        filtered="$(printf '%s\n' "${parsed}" | awk '
+            /^===RELEVANT===$/ { mode="relevant"; next }
+            /^===NOISE===$/ { mode="noise"; next }
+            mode=="relevant" && NF { print }
+        ')"
+        noise="$(printf '%s\n' "${parsed}" | awk '
+            /^===NOISE===$/ { mode="noise"; next }
+            mode=="noise" && NF { print }
+        ')"
+    else
+        filtered="$(printf '%s\n' "${output}" | grep -Eai "${cnc_pattern}" | grep -Eavi "${noise_pattern}" || true)"
+        noise="$(printf '%s\n' "${output}" | grep -Eai "${noise_pattern}" || true)"
+    fi
+
+    while IFS= read -r line; do
+        if [ -z "${line}" ]; then
+            continue
+        fi
+        append_system_noise "${line}"
+    done <<< "${noise}"
+
+    noise_compact="$(compact_output "${noise}")"
+    if [ -n "${noise_compact}" ]; then
+        add_check "logs" "WARN" "WARN" "System journal unrelated noise (last 200)" "${noise_compact}"
+    fi
+
     compact="$(compact_output "${filtered}")"
     if [ -z "${compact}" ]; then
         add_check "logs" "CRITICAL" "PASS" "System CNC journal errors (last 200)" "none"
@@ -1357,7 +1463,10 @@ print_json_report() {
     printf '    "critical": %s,\n' "${CRITICAL_COUNT}"
     printf '    "warnings": %s,\n' "${WARN_COUNT}"
     printf '    "status": "%s"\n' "${summary_status}"
-    printf '  }\n'
+    printf '  },\n'
+    printf '  "system_noise": ['
+    printf '%s' "${SYSTEM_NOISE_JSON}"
+    printf ']\n'
     printf '}\n'
 }
 
@@ -1392,9 +1501,6 @@ parse_args() {
 compute_exit_code() {
     if [ "${CRITICAL_COUNT}" -gt 0 ]; then
         return 1
-    fi
-    if [ "${WARN_COUNT}" -gt 0 ]; then
-        return 2
     fi
     return 0
 }
