@@ -53,6 +53,40 @@ parse_args() {
     done
 }
 
+is_allowed_origin_url() {
+    local url="$1"
+    if [[ "${url}" =~ (^|[:/])KrzysztofOle/cnc-control(\.git)?$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+resolve_remote_ref_type() {
+    local remote="$1"
+    local repo_dir="${2:-}"
+    if [ -n "${repo_dir}" ]; then
+        if run_as_install_user git -C "${repo_dir}" ls-remote --exit-code --heads "${remote}" "${SELECTED_BRANCH}" >/dev/null 2>&1; then
+            printf '%s\n' "branch"
+            return 0
+        fi
+        if run_as_install_user git -C "${repo_dir}" ls-remote --exit-code --tags "${remote}" "${SELECTED_BRANCH}" >/dev/null 2>&1; then
+            printf '%s\n' "tag"
+            return 0
+        fi
+        return 1
+    fi
+
+    if run_as_install_user git ls-remote --exit-code --heads "${remote}" "${SELECTED_BRANCH}" >/dev/null 2>&1; then
+        printf '%s\n' "branch"
+        return 0
+    fi
+    if run_as_install_user git ls-remote --exit-code --tags "${remote}" "${SELECTED_BRANCH}" >/dev/null 2>&1; then
+        printf '%s\n' "tag"
+        return 0
+    fi
+    return 1
+}
+
 run_as_root() {
     if [ "${EUID}" -eq 0 ]; then
         "$@"
@@ -191,7 +225,8 @@ fi
 REPO_URL="${CNC_REPO_URL:-${REPO_URL_DEFAULT}}"
 REPO_DIR="${CNC_REPO_DIR:-${INSTALL_HOME}/cnc-control}"
 VENV_DIR="${CNC_VENV_DIR:-${REPO_DIR}/.venv}"
-echo "Using Git branch: ${SELECTED_BRANCH}"
+TARGET_REF_TYPE=""
+COMMIT_HASH=""
 
 echo "[1/9] Aktualizacja systemu"
 run_as_root apt-get update
@@ -207,23 +242,92 @@ run_as_root systemctl enable --now NetworkManager
 echo "[4/9] Klonowanie lub aktualizacja repozytorium (${REPO_URL})"
 run_as_install_user mkdir -p "$(dirname "${REPO_DIR}")"
 if [ -d "${REPO_DIR}/.git" ]; then
-    run_as_install_user git -C "${REPO_DIR}" remote set-url origin "${REPO_URL}"
-    run_as_install_user git -C "${REPO_DIR}" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
-    run_as_install_user git -C "${REPO_DIR}" fetch origin
-    if ! run_as_install_user git -C "${REPO_DIR}" checkout "${SELECTED_BRANCH}"; then
-        echo "[ERROR] Nie udalo sie przelaczyc na galez '${SELECTED_BRANCH}'."
+    if ! run_as_install_user git -C "${REPO_DIR}" diff --quiet || ! run_as_install_user git -C "${REPO_DIR}" diff --cached --quiet; then
+        echo "ERROR: Local changes detected in repository. Aborting bootstrap."
         exit 1
     fi
-    run_as_install_user git -C "${REPO_DIR}" pull --ff-only
+
+    ORIGIN_URL="$(run_as_install_user git -C "${REPO_DIR}" remote get-url origin 2>/dev/null || true)"
+    if [ -z "${ORIGIN_URL}" ]; then
+        echo "ERROR: Cannot determine repository origin URL. Aborting bootstrap."
+        exit 1
+    fi
+    if ! is_allowed_origin_url "${ORIGIN_URL}"; then
+        echo "WARNING: Unexpected origin URL: ${ORIGIN_URL}"
+        echo "ERROR: Repository origin must point to KrzysztofOle/cnc-control. Aborting bootstrap."
+        exit 1
+    fi
+
+    if ! TARGET_REF_TYPE="$(resolve_remote_ref_type origin "${REPO_DIR}")"; then
+        echo "ERROR: Requested ref '${SELECTED_BRANCH}' does not exist on origin."
+        exit 1
+    fi
+
+    run_as_install_user git -C "${REPO_DIR}" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+    run_as_install_user git -C "${REPO_DIR}" fetch origin --tags
+
+    if [ "${TARGET_REF_TYPE}" = "branch" ]; then
+        if ! run_as_install_user git -C "${REPO_DIR}" checkout "${SELECTED_BRANCH}"; then
+            echo "ERROR: Failed to switch to requested branch."
+            exit 1
+        fi
+        CURRENT_BRANCH="$(run_as_install_user git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD)"
+        if [ "${CURRENT_BRANCH}" != "${SELECTED_BRANCH}" ]; then
+            echo "ERROR: Failed to switch to requested branch."
+            exit 1
+        fi
+        run_as_install_user git -C "${REPO_DIR}" pull --ff-only
+        echo "Using Git branch: ${SELECTED_BRANCH}"
+    else
+        if ! run_as_install_user git -C "${REPO_DIR}" checkout --detach "tags/${SELECTED_BRANCH}"; then
+            echo "ERROR: Failed to checkout requested tag."
+            exit 1
+        fi
+        echo "Using tag: ${SELECTED_BRANCH}"
+    fi
 elif [ -d "${REPO_DIR}" ] && [ -n "$(ls -A "${REPO_DIR}")" ]; then
     echo "Katalog ${REPO_DIR} istnieje i nie jest repozytorium git. Przerwano."
     exit 1
 else
-    if ! run_as_install_user git clone --branch "${SELECTED_BRANCH}" --single-branch "${REPO_URL}" "${REPO_DIR}"; then
-        echo "[ERROR] Nie udalo sie sklonowac galezi '${SELECTED_BRANCH}' z ${REPO_URL}."
+    if ! is_allowed_origin_url "${REPO_URL}"; then
+        echo "WARNING: Unexpected origin URL: ${REPO_URL}"
+        echo "ERROR: Repository origin must point to KrzysztofOle/cnc-control. Aborting bootstrap."
+        exit 1
+    fi
+
+    if ! TARGET_REF_TYPE="$(resolve_remote_ref_type "${REPO_URL}")"; then
+        echo "ERROR: Requested ref '${SELECTED_BRANCH}' does not exist on origin."
+        exit 1
+    fi
+
+    if [ "${TARGET_REF_TYPE}" = "branch" ]; then
+        if ! run_as_install_user git clone --branch "${SELECTED_BRANCH}" --single-branch "${REPO_URL}" "${REPO_DIR}"; then
+            echo "[ERROR] Nie udalo sie sklonowac galezi '${SELECTED_BRANCH}' z ${REPO_URL}."
+            exit 1
+        fi
+        echo "Using Git branch: ${SELECTED_BRANCH}"
+    else
+        if ! run_as_install_user git clone "${REPO_URL}" "${REPO_DIR}"; then
+            echo "ERROR: Failed to clone repository for tag checkout."
+            exit 1
+        fi
+        if ! run_as_install_user git -C "${REPO_DIR}" checkout --detach "tags/${SELECTED_BRANCH}"; then
+            echo "ERROR: Failed to checkout requested tag."
+            exit 1
+        fi
+        echo "Using tag: ${SELECTED_BRANCH}"
+    fi
+
+    ORIGIN_URL="$(run_as_install_user git -C "${REPO_DIR}" remote get-url origin 2>/dev/null || true)"
+    if ! is_allowed_origin_url "${ORIGIN_URL}"; then
+        echo "WARNING: Unexpected origin URL: ${ORIGIN_URL}"
+        echo "ERROR: Repository origin must point to KrzysztofOle/cnc-control. Aborting bootstrap."
         exit 1
     fi
 fi
+
+COMMIT_HASH="$(run_as_install_user git -C "${REPO_DIR}" rev-parse --short HEAD)"
+echo "Using commit: ${COMMIT_HASH}"
 
 PYTHON3_BIN="$(command -v python3 || true)"
 if [ -z "${PYTHON3_BIN}" ]; then
