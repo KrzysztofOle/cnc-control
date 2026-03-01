@@ -28,17 +28,13 @@ Every run starts with `phase_0_preflight`. By default it executes a remote CI re
    - `tools/setup_usb_service.sh`
    - `tools/setup_led_service.sh`
 4. Diagnostics:
-   - `./tools/cnc_selftest.sh --json`
+   - selftest v2 executed via Python (`cnc_control.selftest.core.run_selftest`)
    - `systemctl is-active cnc-webui.service`
    - `systemctl is-active cnc-usb.service`
    - `systemctl is-active cnc-led.service`
-   - `journalctl -p 3 -n 20 --no-pager` (must have no CNC-related entries)
 
-The runner includes automatic selftest repair for SHADOW
-`Runtime LUN image matches expected`:
-- detects this specific failed check,
-- reloads `g_mass_storage` for the active slot (`A/B`),
-- re-runs `cnc_selftest` once.
+Preflight does not implement a local journal filter and does not duplicate the
+`critical` definition. Selftest v2 is the single source of truth for diagnostics.
 
 If any step fails, preflight is marked as `failed` and functional phases are skipped.
 
@@ -88,7 +84,7 @@ python3 integration_tests/test_runner.py \
 - `--skip-target-check` - skip local `.cnc_target` validation.
 - `--skip-remote-refresh` - skip remote CI refresh in preflight.
 - `--remote-refresh-timeout 300` - timeout for pull/install/setup commands.
-- `--remote-selftest-timeout 180` - timeout for `cnc_selftest`.
+- `--remote-selftest-timeout 180` - timeout for selftest v2.
 - `--disable-selftest-auto-repair` - disable one-shot SHADOW LUN auto-repair.
 - `--switch-timeout 90` - timeout waiting for NET/USB mode switch.
 - `--usb-host-mount /Volumes/CNC_USB` - local mount path of gadget storage on DEV machine; enables direct host-side read in USB phase.
@@ -111,7 +107,7 @@ Report includes:
 - `git pull --ff-only` fails due to merge/local changes on RPi.
 - missing `sudo -n` for setup or `journalctl`.
 - `systemctl is-active` not equal to `active`.
-- CNC-related entries returned by `journalctl -p 3 -n 20`.
+- `critical > 0` reported by selftest v2.
 - missing `--smb-share` for `--mode all` or `--mode smb`.
 
 ## Safety

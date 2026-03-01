@@ -43,13 +43,13 @@ python3 tools/bootstrap_env.py --target rpi
 sudo ./tools/setup_system.sh
 ```
 
-## Minimalne sudoers dla selftest v2 (SHADOW)
+## Minimalne wymagania dla selftest v2
 
-`cnc-selftest` uruchamiany jako zwykly uzytkownik wykonuje operacje root przez
-`sudo -n` (bez promptu hasla). Jesli host nie ma tych uprawnien, selftest zwroci
-kontrolowany blad krytyczny `ERR_MISSING_SUDO`.
+`cnc-selftest` uruchamiany jako zwykly uzytkownik wymaga dostepu do `sudo -n`
+dla komend diagnostycznych wykonywanych z uprawnieniami root.
+Brak tych uprawnien powoduje kontrolowany blad krytyczny `ERR_MISSING_SUDO`.
 
-Minimalny wpis sudoers (bez wildcard `*`):
+Minimalny profil sudoers:
 
 ```text
 cnc ALL=(root) NOPASSWD: /bin/mount
@@ -57,6 +57,11 @@ cnc ALL=(root) NOPASSWD: /bin/umount
 cnc ALL=(root) NOPASSWD: /sbin/modprobe
 cnc ALL=(root) NOPASSWD: /bin/lsmod
 ```
+
+Zasady:
+
+- bez wildcard `*`,
+- bez dostepu do innych polecen.
 
 Zaleznosci aplikacji sa zarzadzane przez `pyproject.toml`.
 Uslugi `cnc-webui.service` oraz `cnc-led.service` preferuja interpreter

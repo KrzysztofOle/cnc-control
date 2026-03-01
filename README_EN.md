@@ -166,6 +166,44 @@ The tag description is displayed in the WebUI.
 ./tools/cnc_selftest.sh --json
 ```
 
+## 🧪 Selftest v2 (Python, SHADOW-only)
+
+### 1) Architecture
+
+- `cnc-selftest` is a Python entrypoint: `cnc_control.selftest.cli`.
+- `tools/cnc_selftest.sh` is only a thin CLI wrapper that calls the Python module.
+- Journal parsing has a single implementation (`cnc_control.selftest.journal`) with no duplicate parser in the integration runner.
+- Classification does not use hostname-based substring heuristics.
+
+### 2) JSON Contract
+
+Example payload:
+
+```json
+{
+  "status": "OK|FAILED",
+  "critical": 0,
+  "warnings": 2,
+  "system_noise": 8,
+  "details": {}
+}
+```
+
+Field meaning:
+
+| Field | Meaning |
+|---|---|
+| `critical` | SHADOW specification violation (CI-blocking). |
+| `warnings` | Non-critical diagnostic issues. |
+| `system_noise` | System-level errors not directly related to CNC. |
+| `status` | `FAILED` only when `critical > 0`. |
+
+### 3) Exit code
+
+- exit `0` -> `critical == 0`
+- exit `1` -> `critical > 0`
+- `warnings` and `system_noise` do not block CI
+
 ---
 
 ## 🧩 systemd Services (Autostart)
