@@ -813,11 +813,31 @@ class Runner:
         return messages
 
     def filter_cnc_journal_lines(self, journal_lines: list[str]) -> list[str]:
-        pattern = re.compile(
-            r"(cnc[-_]|cnc-control|shadow|shadow_usb_export|led_status|webui)",
+        include_pattern = re.compile(
+            r"(cnc-(usb|webui|led)\.service|cnc-control|shadow|shadow_usb_export|g_mass_storage|dwc2)",
             flags=re.IGNORECASE,
         )
-        return [line for line in journal_lines if pattern.search(line)]
+        include_usb_message_pattern = re.compile(
+            r"\busb(?:[_ -]gadget|[_ -]mass[_ -]storage)?\b",
+            flags=re.IGNORECASE,
+        )
+        noise_pattern = re.compile(
+            r"(bluetoothd|wpa_supplicant|dhcpcd|networkmanager|avahi-daemon|modemmanager|systemd-resolved)",
+            flags=re.IGNORECASE,
+        )
+
+        filtered: list[str] = []
+        for line in journal_lines:
+            if noise_pattern.search(line):
+                continue
+            if include_pattern.search(line):
+                filtered.append(line)
+                continue
+            message = line.split(": ", 1)[1] if ": " in line else line
+            if include_usb_message_pattern.search(message):
+                filtered.append(line)
+
+        return filtered
 
     def parse_json_if_possible(self, content: str) -> Any:
         text = content.strip()
