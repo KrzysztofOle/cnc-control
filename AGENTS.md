@@ -110,7 +110,8 @@ Po wypchnięciu zmian na serwer:
 CODEX łączy się przez SSH z jednym z testowych Raspberry Pi:
 
 - `ssh cnc@192.168.7.139`
-- `ssh andrzej@192.168.7.110`
+- `ssh cnc@192.168.7.110`
+- hasło: cnc
 
 Następnie:
 

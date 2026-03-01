@@ -2110,7 +2110,11 @@ body.ui-busy #loading-overlay * {
           payload.active ? "Status: aktywny" : "Status: wyłączony",
           payload.active ? "ok" : "off",
         );
-        setResult("", "muted");
+        if (payload.available === false && payload.error) {
+          setResult(payload.error, "off");
+        } else {
+          setResult("", "muted");
+        }
       } catch (error) {
         setState("Status: błąd", "error");
         setResult(error.message || "Błąd pobierania stanu.", "error");
@@ -2731,7 +2735,12 @@ def apply_hostname_change(hostname_value):
 
 
 def parse_systemctl_state(value, true_value, false_values):
-    if value == true_value:
+    if isinstance(true_value, str):
+        true_values = {true_value}
+    else:
+        true_values = set(true_value)
+
+    if value in true_values:
         return True, None
     if value in false_values:
         return False, None
@@ -2740,15 +2749,43 @@ def parse_systemctl_state(value, true_value, false_values):
     return None, f"Nieznany stan systemctl: {value}"
 
 
+def is_systemctl_missing_unit(result):
+    detail = f"{result.stderr or ''}\n{result.stdout or ''}".casefold()
+    markers = (
+        "could not be found",
+        "not found",
+        "no such file or directory",
+        "not loaded",
+    )
+    return any(marker in detail for marker in markers)
+
+
+def parse_systemctl_result(result, true_values, false_values):
+    value = (result.stdout or "").strip()
+    parsed_value, parse_error = parse_systemctl_state(value, true_values, false_values)
+    if not parse_error:
+        return parsed_value, None
+
+    if is_systemctl_missing_unit(result):
+        return None, "Brak usługi ZeroTier"
+
+    if result.returncode != 0 and not value:
+        detail = (result.stderr or "").strip()
+        if detail:
+            return None, f"Błąd systemctl: {detail}"
+        return None, "Błąd systemctl"
+
+    return None, parse_error
+
+
 def read_zerotier_state():
     result, error = run_systemctl_command(["is-active", ZEROTIER_SERVICE], timeout=6)
     if error:
         return None, None, error
-    active_value = (result.stdout or "").strip()
-    active, active_error = parse_systemctl_state(
-        active_value,
-        "active",
-        {"inactive", "failed", "deactivating", "activating"},
+    active, active_error = parse_systemctl_result(
+        result,
+        {"active", "reloading"},
+        {"inactive", "failed", "deactivating", "activating", "maintenance"},
     )
     if active_error:
         return None, None, active_error
@@ -2756,11 +2793,19 @@ def read_zerotier_state():
     result, error = run_systemctl_command(["is-enabled", ZEROTIER_SERVICE], timeout=6)
     if error:
         return None, None, error
-    enabled_value = (result.stdout or "").strip()
-    enabled, enabled_error = parse_systemctl_state(
-        enabled_value,
-        "enabled",
-        {"disabled", "static", "indirect", "masked"},
+    enabled, enabled_error = parse_systemctl_result(
+        result,
+        {"enabled", "enabled-runtime", "linked", "linked-runtime", "alias"},
+        {
+            "disabled",
+            "static",
+            "indirect",
+            "masked",
+            "masked-runtime",
+            "generated",
+            "transient",
+            "bad",
+        },
     )
     if enabled_error:
         return None, None, enabled_error
@@ -3154,8 +3199,17 @@ def api_hostname_set():
 def api_zerotier_status():
     active, enabled, error = read_zerotier_state()
     if error:
+        if error == "Brak usługi ZeroTier":
+            return jsonify(
+                {
+                    "active": False,
+                    "enabled": False,
+                    "available": False,
+                    "error": error,
+                }
+            )
         return jsonify({"error": error}), 500
-    return jsonify({"active": bool(active), "enabled": bool(enabled)})
+    return jsonify({"active": bool(active), "enabled": bool(enabled), "available": True})
 
 @app.route("/api/zerotier", methods=["POST"])
 def api_zerotier_toggle():
