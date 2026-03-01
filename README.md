@@ -469,9 +469,11 @@ cnc-control/
 
 ---
 
-## 📄 Licencja
+## License
 
-MIT
+This software is licensed under the **Non-Commercial Krzysztof Olejnik License (NC-KO) — v1.0**  
+See [LICENSE](LICENSE) for full details.  
+Commercial use is prohibited without prior written permission from the author.
 
 ---
 
