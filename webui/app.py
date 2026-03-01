@@ -15,8 +15,10 @@ import json
 import re
 import shutil
 import sys
+import socket
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from hostname_utils import normalize_pretty_hostname, normalize_static_hostname
 
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -113,6 +115,24 @@ HIDDEN_NAMES = {
     ".Trashes",
 }
 _LED_IDLE_SET = False
+HOSTS_SYNC_SCRIPT = (
+    "import pathlib, sys\n"
+    "hostname = sys.argv[1]\n"
+    "path = pathlib.Path('/etc/hosts')\n"
+    "text = path.read_text(encoding='utf-8', errors='ignore')\n"
+    "lines = text.splitlines()\n"
+    "updated = False\n"
+    "result = []\n"
+    "for line in lines:\n"
+    "    if line.strip().startswith('127.0.1.1'):\n"
+    "        result.append('127.0.1.1\\t' + hostname)\n"
+    "        updated = True\n"
+    "    else:\n"
+    "        result.append(line)\n"
+    "if not updated:\n"
+    "    result.append('127.0.1.1\\t' + hostname)\n"
+    "path.write_text('\\n'.join(result) + '\\n', encoding='utf-8')\n"
+)
 
 
 def _set_led_mode(mode_name):
@@ -582,6 +602,22 @@ body.ui-busy #loading-overlay * {
 <hr>
 
 <h3>System</h3>
+<div id="hostname-panel">
+  <div class="wifi-row">
+    <label for="hostname-input">Nazwa Raspberry Pi</label>
+    <input type="text" id="hostname-input" placeholder="np. CNC_USB">
+    <button type="button" id="hostname-save">Zmien nazwe</button>
+  </div>
+  <div class="wifi-row">
+    <span class="wifi-status wifi-status-muted"><b>Static:</b> <span id="hostname-static">-</span></span>
+    <span class="wifi-status wifi-status-muted"><b>Pretty:</b> <span id="hostname-pretty">-</span></span>
+    <span class="wifi-status wifi-status-muted"><b>mDNS:</b> <span id="hostname-mdns">-</span></span>
+  </div>
+  <div id="hostname-status" class="wifi-status wifi-status-muted">Status: nieznany</div>
+</div>
+
+<hr>
+
 <form action="/restart" method="post">
   <input type="hidden" name="next" value="system">
   <button type="submit">Restart</button>
@@ -1825,6 +1861,126 @@ body.ui-busy #loading-overlay * {
     })();
   }
 
+  function initHostnameControls() {
+    const input = document.getElementById("hostname-input");
+    if (!input) {
+      return;
+    }
+    const saveButton = document.getElementById("hostname-save");
+    const staticLabel = document.getElementById("hostname-static");
+    const prettyLabel = document.getElementById("hostname-pretty");
+    const mdnsLabel = document.getElementById("hostname-mdns");
+    const statusLabel = document.getElementById("hostname-status");
+
+    function setHostnameStatus(text, level) {
+      if (!statusLabel) {
+        return;
+      }
+      statusLabel.textContent = text;
+      statusLabel.classList.remove("wifi-status-ok", "wifi-status-error", "wifi-status-muted");
+      if (level === "ok") {
+        statusLabel.classList.add("wifi-status-ok");
+      } else if (level === "error") {
+        statusLabel.classList.add("wifi-status-error");
+      } else {
+        statusLabel.classList.add("wifi-status-muted");
+      }
+    }
+
+    function applyHostnamePayload(payload) {
+      const staticName = payload && payload.static ? String(payload.static) : "-";
+      const prettyName = payload && payload.pretty ? String(payload.pretty) : staticName;
+      const mdnsName = payload && payload.mdns ? String(payload.mdns) : (staticName !== "-" ? staticName + ".local" : "-");
+
+      if (staticLabel) {
+        staticLabel.textContent = staticName;
+      }
+      if (prettyLabel) {
+        prettyLabel.textContent = prettyName;
+      }
+      if (mdnsLabel) {
+        mdnsLabel.textContent = mdnsName;
+      }
+      if (input && !input.value.trim()) {
+        input.value = prettyName !== "-" ? prettyName : "";
+      }
+    }
+
+    async function refreshHostname() {
+      try {
+        const response = await fetch("/api/hostname", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error("Błąd odczytu nazwy hosta (HTTP " + response.status + ").");
+        }
+        const payload = await response.json();
+        applyHostnamePayload(payload);
+        setHostnameStatus("Status: gotowe", "muted");
+      } catch (error) {
+        setHostnameStatus(error.message || "Nie można odczytać nazwy hosta.", "error");
+      }
+    }
+
+    async function saveHostname() {
+      if (!saveButton || busy) {
+        return;
+      }
+      const requestedHostname = input.value.trim();
+      if (!requestedHostname) {
+        setHostnameStatus("Podaj nazwę hosta.", "error");
+        return;
+      }
+
+      setBusy(true, "Zmiana nazwy Raspberry Pi...");
+      setHostnameStatus("Zmieniam nazwę hosta...", "muted");
+      try {
+        const response = await fetch("/api/hostname", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ hostname: requestedHostname }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const message = payload && payload.error
+            ? payload.error
+            : "Błąd zmiany nazwy hosta (HTTP " + response.status + ").";
+          throw new Error(message);
+        }
+        applyHostnamePayload(payload);
+        input.value = payload && payload.pretty ? String(payload.pretty) : requestedHostname;
+        let message = payload && payload.message ? payload.message : "Zmieniono nazwę hosta.";
+        if (payload && payload.warning) {
+          message = message + " Uwaga: " + payload.warning;
+          setHostnameStatus(message, "error");
+        } else {
+          setHostnameStatus(message, "ok");
+        }
+      } catch (error) {
+        setHostnameStatus(error.message || "Nie udało się zmienić nazwy hosta.", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    if (saveButton) {
+      saveButton.addEventListener("click", saveHostname);
+    }
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      saveHostname();
+    });
+    refreshHostname();
+  }
+
   function initZeroTierControls() {
     const toggle = document.getElementById("zerotier-toggle");
     if (!toggle) {
@@ -1988,6 +2144,7 @@ body.ui-busy #loading-overlay * {
 
     initShadowControls();
     initWifiControls();
+    initHostnameControls();
     initZeroTierControls();
     initFileDeleteControls();
   });
@@ -2268,7 +2425,7 @@ def run_systemctl_command(args, timeout=10):
     return result, None
 
 
-def is_systemctl_permission_error(result):
+def is_command_permission_error(result):
     detail = f"{result.stderr or ''}\n{result.stdout or ''}".casefold()
     markers = (
         "interactive authentication required",
@@ -2276,39 +2433,174 @@ def is_systemctl_permission_error(result):
         "access denied",
         "permission denied",
         "org.freedesktop.policykit1",
+        "must be superuser",
+        "must be root",
+        "not privileged",
     )
     return any(marker in detail for marker in markers)
 
 
-def restart_systemd_unit(unit_name, timeout=10):
-    commands = [["systemctl", "--no-block", "restart", unit_name]]
+def run_command_with_sudo_fallback(command, timeout=10):
+    if not command:
+        return None, "Niepoprawne polecenie"
+
+    commands = [command]
     if shutil.which("sudo"):
-        commands.append(["sudo", "-n", "systemctl", "--no-block", "restart", unit_name])
+        commands.append(["sudo", "-n"] + command)
 
     last_result = None
-    for index, command in enumerate(commands):
+    for index, command_args in enumerate(commands):
         try:
             result = subprocess.run(
-                command,
+                command_args,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return None, "Timeout restartu GUI"
+            command_name = command[0] if command else "polecenia"
+            return None, f"Timeout polecenia: {command_name}"
         except OSError:
             if index == len(commands) - 1:
-                return None, "Nie można uruchomić systemctl"
+                command_name = command[0] if command else "polecenia"
+                return None, f"Nie można uruchomić polecenia: {command_name}"
             continue
 
         last_result = result
         if result.returncode == 0:
             return result, None
-        if index == 0 and len(commands) > 1 and is_systemctl_permission_error(result):
+        if index == 0 and len(commands) > 1 and is_command_permission_error(result):
             continue
         break
     return last_result, None
+
+
+def restart_systemd_unit(unit_name, timeout=10):
+    result, error = run_command_with_sudo_fallback(
+        ["systemctl", "--no-block", "restart", unit_name],
+        timeout=timeout,
+    )
+    if error:
+        if "Timeout polecenia" in error:
+            return None, "Timeout restartu GUI"
+        if "Nie można uruchomić polecenia" in error:
+            return None, "Nie można uruchomić systemctl"
+        return None, error
+    return result, None
+
+
+def read_hostname_state():
+    static_name = socket.gethostname().strip()
+    pretty_name = ""
+
+    if shutil.which("hostnamectl"):
+        try:
+            static_result = subprocess.run(
+                ["hostnamectl", "--static"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if static_result.returncode == 0 and static_result.stdout.strip():
+                static_name = static_result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+        try:
+            pretty_result = subprocess.run(
+                ["hostnamectl", "--pretty"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if pretty_result.returncode == 0 and pretty_result.stdout.strip():
+                pretty_name = pretty_result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if not pretty_name:
+        pretty_name = static_name
+    return {
+        "static": static_name,
+        "pretty": pretty_name,
+        "mdns": f"{static_name}.local",
+    }
+
+
+def update_hosts_hostname_mapping(static_hostname):
+    python_exec = shutil.which("python3") or sys.executable
+    if not python_exec:
+        return "Brak python3 do aktualizacji /etc/hosts"
+
+    result, error = run_command_with_sudo_fallback(
+        [python_exec, "-c", HOSTS_SYNC_SCRIPT, static_hostname],
+        timeout=8,
+    )
+    if error:
+        return error
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        if detail:
+            return f"Nie można zaktualizować /etc/hosts: {detail}"
+        return "Nie można zaktualizować /etc/hosts"
+    return None
+
+
+def apply_hostname_change(hostname_value):
+    if not shutil.which("hostnamectl"):
+        return None, "Brak hostnamectl"
+
+    pretty_name = normalize_pretty_hostname(hostname_value)
+    if not pretty_name:
+        return None, "Nazwa hosta nie moze byc pusta"
+
+    static_name = normalize_static_hostname(pretty_name)
+    if not static_name:
+        return None, (
+            "Nieprawidlowa nazwa hosta. Dozwolone znaki dla static hostname: "
+            "litery, cyfry i '-' (1-63 znaki)."
+        )
+
+    commands = [
+        ["hostnamectl", "set-hostname", static_name, "--static"],
+        ["hostnamectl", "set-hostname", static_name, "--transient"],
+        ["hostnamectl", "set-hostname", pretty_name, "--pretty"],
+    ]
+
+    for command in commands:
+        result, error = run_command_with_sudo_fallback(command, timeout=10)
+        if error:
+            return None, error
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if detail:
+                return None, f"Blad zmiany nazwy hosta: {detail}"
+            return None, "Blad zmiany nazwy hosta"
+
+    warnings = []
+    hosts_warning = update_hosts_hostname_mapping(static_name)
+    if hosts_warning:
+        warnings.append(hosts_warning)
+
+    avahi_result, avahi_error = run_command_with_sudo_fallback(
+        ["systemctl", "restart", "avahi-daemon"],
+        timeout=8,
+    )
+    if avahi_error:
+        warnings.append(f"Nie mozna zrestartowac avahi-daemon: {avahi_error}")
+    elif avahi_result.returncode != 0:
+        detail = (avahi_result.stderr or avahi_result.stdout or "").strip()
+        if detail:
+            warnings.append(f"Nie mozna zrestartowac avahi-daemon: {detail}")
+        else:
+            warnings.append("Nie mozna zrestartowac avahi-daemon")
+
+    current = read_hostname_state()
+    current["warnings"] = warnings
+    return current, None
 
 
 def parse_systemctl_state(value, true_value, false_values):
@@ -2684,6 +2976,42 @@ def api_restart_gui():
         return jsonify({"error": message}), 500
 
     return jsonify({"ok": True})
+
+
+@app.route("/api/hostname", methods=["GET"])
+def api_hostname_get():
+    return jsonify(read_hostname_state())
+
+
+@app.route("/api/hostname", methods=["POST"])
+def api_hostname_set():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Nieprawidłowe dane JSON"}), 400
+
+    hostname_value = payload.get("hostname")
+    if not isinstance(hostname_value, str):
+        return jsonify({"error": "Pole hostname musi być typu string"}), 400
+
+    hostname_state, error = apply_hostname_change(hostname_value)
+    if error:
+        if error.startswith("Nieprawidlowa nazwa hosta") or error.endswith("pusta"):
+            return jsonify({"error": error}), 400
+        return jsonify({"error": error}), 500
+
+    warnings = hostname_state.pop("warnings", [])
+    response = {
+        "ok": True,
+        "message": (
+            "Zmieniono nazwę hosta. "
+            "Nowy adres mDNS: " + hostname_state.get("mdns", "")
+        ),
+        **hostname_state,
+    }
+    if warnings:
+        response["warning"] = "; ".join(warnings)
+    return jsonify(response)
+
 
 @app.route("/api/zerotier", methods=["GET"])
 def api_zerotier_status():

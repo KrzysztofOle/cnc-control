@@ -226,9 +226,21 @@ Minimalny sudoers (plik `/etc/sudoers.d/cnc-wifi`):
 ```bash
 andrzej ALL=(root) NOPASSWD: /usr/bin/nmcli *
 andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl stop cnc-ap.service
+andrzej ALL=(root) NOPASSWD: /usr/bin/hostnamectl set-hostname *
+andrzej ALL=(root) NOPASSWD: /usr/bin/systemctl restart avahi-daemon
 ```
 
 Skrypt pomocniczy używany przez WebUI: `tools/wifi_control.sh`.
+
+### Zmiana nazwy Raspberry Pi z WebUI
+
+W zakladce `System` dostepna jest sekcja `Nazwa Raspberry Pi`.
+
+- pole akceptuje nazwe przyjazna operatorowi (np. `CNC_USB`),
+- WebUI zapisuje:
+  - `pretty hostname` bez zmian (`CNC_USB`),
+  - `static hostname` w formacie Linux/mDNS (`cnc-usb`),
+- po zmianie nazwy pokazany jest aktualny adres `mDNS` (np. `cnc-usb.local`).
 
 ### Blokada trybu AP
 
