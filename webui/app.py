@@ -2694,6 +2694,9 @@ def is_command_permission_error(result):
         "must be superuser",
         "must be root",
         "not privileged",
+        "uruchom skrypt z sudo",
+        "run script with sudo",
+        "a password is required",
     )
     return any(marker in detail for marker in markers)
 

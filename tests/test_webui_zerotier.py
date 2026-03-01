@@ -158,3 +158,35 @@ def test_api_zerotier_setup_installs_and_returns_status(monkeypatch) -> None:
     assert payload["active"] is True
     assert payload["enabled"] is True
     assert payload["available"] is True
+
+
+def test_run_command_with_sudo_fallback_retries_when_script_requires_sudo(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command_args, **_kwargs):
+        calls.append(command_args)
+        if len(calls) == 1:
+            return make_result(
+                1,
+                "",
+                "Uruchom skrypt z sudo, np.: sudo ./tools/setup_zerotier.sh",
+            )
+        return make_result(0, "ok\n", "")
+
+    monkeypatch.setattr(
+        webui_app.shutil,
+        "which",
+        lambda command: "/usr/bin/sudo" if command == "sudo" else None,
+    )
+    monkeypatch.setattr(webui_app.subprocess, "run", fake_run)
+
+    result, error = webui_app.run_command_with_sudo_fallback(
+        ["bash", "/tmp/setup_zerotier.sh"],
+        timeout=5,
+    )
+
+    assert error is None
+    assert result is not None
+    assert result.returncode == 0
+    assert len(calls) == 2
+    assert calls[1][:3] == ["sudo", "-n", "bash"]
