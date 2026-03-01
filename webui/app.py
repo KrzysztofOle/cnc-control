@@ -336,6 +336,38 @@ button:disabled {
   gap: 8px;
 }
 
+.cnc-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.cnc-file-link:hover {
+  text-decoration: underline;
+}
+
+.cnc-file-link-dir {
+  color: #0b4f9c;
+  font-weight: 600;
+}
+
+.cnc-entry-icon {
+  min-width: 1.4em;
+  text-align: center;
+  font-size: 16px;
+}
+
+#cnc-current-dir {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: #444444;
+}
+
+#cnc-current-dir code {
+  font-size: 12px;
+}
+
 #zerotier-panel {
   display: flex;
   flex-direction: column;
@@ -574,16 +606,31 @@ body.ui-busy #loading-overlay * {
 <h3>Pliki CNC</h3>
 <form id="delete-files-form" action="/delete-files" method="post" onsubmit="return handleDeleteSubmit(this);">
   <input type="hidden" name="confirm_delete" id="confirm-delete-input" value="no">
+  <input type="hidden" name="dir" value="{{ current_dir }}">
+  <p id="cnc-current-dir">
+    {% if current_dir %}
+      <a href="{{ url_for('index', dir=parent_dir) }}">[..]</a>
+    {% endif %}
+    Katalog: <code>/{{ current_dir }}</code>
+  </p>
   <ul id="cnc-files-list">
-  {% for f in files %}
+  {% for entry in files %}
     <li>
+      {% if entry.is_dir %}
+      <a class="cnc-file-link cnc-file-link-dir" href="{{ url_for('index', dir=entry.rel_path) }}">
+        <span class="cnc-entry-icon" aria-hidden="true">📁</span>
+        <span>{{ entry.name }}</span>
+      </a>
+      {% else %}
       <label class="cnc-file-entry">
-        <input type="checkbox" name="files" value="{{ f }}" class="cnc-file-checkbox">
-        <span>{{ f }}</span>
+        <input type="checkbox" name="files" value="{{ entry.rel_path }}" class="cnc-file-checkbox">
+        <span class="cnc-entry-icon" aria-hidden="true">📄</span>
+        <span>{{ entry.name }}</span>
       </label>
+      {% endif %}
     </li>
   {% else %}
-    <li>Brak plikow.</li>
+    <li>Brak plikow i folderow.</li>
   {% endfor %}
   </ul>
   <button type="submit" id="delete-files-button">Usun zaznaczone</button>
@@ -593,6 +640,7 @@ body.ui-busy #loading-overlay * {
 
 <h3>Upload pliku</h3>
 <form method=post enctype=multipart/form-data action="/upload">
+  <input type="hidden" name="dir" value="{{ current_dir }}">
   <input type=file name=file>
   <input type=submit value=Upload>
 </form>
@@ -992,12 +1040,18 @@ body.ui-busy #loading-overlay * {
     );
 
     function updateDeleteState() {
+      if (checkboxes.length === 0) {
+        deleteButton.textContent = "Usun zaznaczone";
+        deleteButton.disabled = true;
+        return;
+      }
       const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
       if (selectedCount > 0) {
         deleteButton.textContent = "Usun zaznaczone (" + selectedCount + ")";
       } else {
         deleteButton.textContent = "Usun zaznaczone";
       }
+      deleteButton.disabled = false;
     }
 
     checkboxes.forEach((checkbox) => {
@@ -2158,27 +2212,100 @@ def is_hidden_file(name):
     return name.startswith(".") or name in HIDDEN_NAMES
 
 
-def resolve_upload_file_path(upload_dir, raw_name):
-    if not isinstance(raw_name, str):
+def normalize_relative_upload_path(raw_path):
+    if raw_path is None:
+        return ""
+    if not isinstance(raw_path, str):
+        return None
+    candidate = raw_path.strip().replace("\\", "/")
+    if candidate in {"", "."}:
+        return ""
+    if candidate.startswith("/"):
+        return None
+
+    parts = []
+    for part in candidate.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            return None
+        if is_hidden_file(part):
+            return None
+        parts.append(part)
+
+    return "/".join(parts)
+
+
+def resolve_upload_path(upload_dir, raw_path, expect_directory=False):
+    normalized = normalize_relative_upload_path(raw_path)
+    if normalized is None:
         return None, None
-    name = raw_name
-    if not name:
-        return None, None
-    if name in {".", ".."}:
-        return None, None
-    if os.path.basename(name) != name:
-        return None, None
-    if is_hidden_file(name):
-        return None, None
+
     upload_abs = os.path.abspath(upload_dir)
-    target_abs = os.path.abspath(os.path.join(upload_abs, name))
+    target_abs = upload_abs
+    if normalized:
+        target_abs = os.path.abspath(os.path.join(upload_abs, normalized))
+
+    upload_real = os.path.realpath(upload_abs)
+    target_real = os.path.realpath(target_abs)
     try:
-        common = os.path.commonpath([upload_abs, target_abs])
+        common = os.path.commonpath([upload_real, target_real])
     except ValueError:
         return None, None
-    if common != upload_abs:
+    if common != upload_real:
         return None, None
-    return target_abs, name
+    if expect_directory and not os.path.isdir(target_abs):
+        return None, None
+    return target_abs, normalized
+
+
+def list_upload_entries(upload_dir, raw_dir):
+    current_abs, current_rel = resolve_upload_path(
+        upload_dir,
+        raw_dir,
+        expect_directory=True,
+    )
+    if not current_abs:
+        return None, None
+
+    entries = []
+    try:
+        names = os.listdir(current_abs)
+    except OSError:
+        return None, None
+
+    for name in names:
+        if is_hidden_file(name):
+            continue
+        entry_abs = os.path.join(current_abs, name)
+        is_directory = os.path.isdir(entry_abs) and not os.path.islink(entry_abs)
+        rel_path = name if not current_rel else f"{current_rel}/{name}"
+        entries.append(
+            {
+                "name": name,
+                "rel_path": rel_path,
+                "is_dir": is_directory,
+            }
+        )
+
+    entries.sort(key=lambda item: (0 if item["is_dir"] else 1, item["name"].casefold()))
+    return entries, current_rel
+
+
+def redirect_to_index(message=None, directory=""):
+    params = {}
+    if message:
+        params["msg"] = message
+    if directory:
+        params["dir"] = directory
+    return redirect(url_for("index", **params))
+
+
+def resolve_upload_file_path(upload_dir, raw_name):
+    target_abs, normalized = resolve_upload_path(upload_dir, raw_name)
+    if not target_abs or not normalized:
+        return None, None
+    return target_abs, normalized
 
 
 def log_webui_event(message):
@@ -2841,17 +2968,23 @@ def index():
         shadow_fsm_class = shadow_fsm_group(shadow_state.get("fsm_state"))
     mode = "SHADOW (A/B)" if CNC_SHADOW_ENABLED else "SHADOW (A/B) [DISABLED]"
     files = []
+    current_dir = ""
+    parent_dir = ""
     message = request.args.get("msg")
+    requested_dir = request.args.get("dir")
     version_data = get_app_version()
     if not upload_dir and not message:
         message = "Brak konfiguracji CNC_MASTER_DIR"
     if not CNC_SHADOW_ENABLED and not message:
         message = "Tryb SHADOW jest wylaczony w konfiguracji (CNC_SHADOW_ENABLED=false)."
     if upload_dir and os.path.isdir(upload_dir):
-        files = sorted(
-            [name for name in os.listdir(upload_dir) if not is_hidden_file(name)],
-            key=str.casefold,
-        )
+        files, current_dir = list_upload_entries(upload_dir, requested_dir)
+        if files is None:
+            files = []
+            if not message:
+                message = "Katalog jest niedostepny albo sciezka jest nieprawidlowa."
+        if current_dir:
+            parent_dir = current_dir.rsplit("/", 1)[0] if "/" in current_dir else ""
     if CNC_SHADOW_ENABLED and shadow_state and shadow_state.get("fsm_state") == "ERROR":
         if not message and isinstance(shadow_state.get("last_error"), dict):
             error_code = shadow_state["last_error"].get("code", "ERR")
@@ -2862,6 +2995,8 @@ def index():
         page="main",
         mode=mode,
         files=files,
+        current_dir=current_dir,
+        parent_dir=parent_dir,
         message=message,
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
@@ -2888,6 +3023,8 @@ def system():
         page="system",
         mode=None,
         files=[],
+        current_dir="",
+        parent_dir="",
         message=message,
         app_version=version_data.get("version"),
         app_description=version_data.get("description"),
@@ -3267,41 +3404,54 @@ def wifi_profile_delete():
 def upload():
     upload_dir = get_upload_directory()
     if not upload_dir:
-        return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
+        return redirect_to_index("Brak konfiguracji CNC_MASTER_DIR")
+
+    target_dir, current_dir = resolve_upload_path(
+        upload_dir,
+        request.form.get("dir"),
+        expect_directory=True,
+    )
+    if not target_dir:
+        return redirect_to_index("Nieprawidlowy katalog docelowy")
 
     if "file" not in request.files:
-        return redirect(url_for("index", msg="Brak pliku w żądaniu"))
+        return redirect_to_index("Brak pliku w żądaniu", current_dir)
 
     f = request.files["file"]
     if not f or f.filename == "":
-        return redirect(url_for("index", msg="Nie wybrano pliku"))
+        return redirect_to_index("Nie wybrano pliku", current_dir)
 
     safe_name = secure_filename(f.filename)
     if safe_name == "":
-        return redirect(url_for("index", msg="Nieprawidłowa nazwa pliku"))
+        return redirect_to_index("Nieprawidłowa nazwa pliku", current_dir)
 
     try:
-        os.makedirs(upload_dir, exist_ok=True)
-        target_path = os.path.join(upload_dir, safe_name)
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, safe_name)
         f.save(target_path)
     except Exception:
-        return redirect(url_for("index", msg="Błąd zapisu pliku"))
+        return redirect_to_index("Błąd zapisu pliku", current_dir)
 
-    return redirect(url_for("index", msg="Upload OK"))
+    return redirect_to_index("Upload OK", current_dir)
 
 
 @app.route("/delete-files", methods=["POST"])
 def delete_files():
     upload_dir = get_upload_directory()
     if not upload_dir:
-        return redirect(url_for("index", msg="Brak konfiguracji CNC_MASTER_DIR"))
+        return redirect_to_index("Brak konfiguracji CNC_MASTER_DIR")
 
-    if not os.path.isdir(upload_dir):
-        return redirect(url_for("index", msg="Katalog plikow CNC jest niedostepny"))
+    _, current_dir = resolve_upload_path(
+        upload_dir,
+        request.form.get("dir"),
+        expect_directory=True,
+    )
+    if current_dir is None:
+        return redirect_to_index("Katalog plikow CNC jest niedostepny")
 
     confirm_delete = (request.form.get("confirm_delete") or "").strip().casefold()
     if confirm_delete not in {"yes", "true", "1", "on"}:
-        return redirect(url_for("index", msg="Kasowanie anulowane: brak potwierdzenia"))
+        return redirect_to_index("Kasowanie anulowane: brak potwierdzenia", current_dir)
 
     requested_files = request.form.getlist("files")
     unique_files = []
@@ -3313,7 +3463,7 @@ def delete_files():
         unique_files.append(raw_name)
 
     if not unique_files:
-        return redirect(url_for("index", msg="Nie wybrano plikow do usuniecia"))
+        return redirect_to_index("Nie wybrano plikow do usuniecia", current_dir)
 
     deleted_count = 0
     failed_count = 0
@@ -3321,6 +3471,10 @@ def delete_files():
     for raw_name in unique_files:
         target_path, clean_name = resolve_upload_file_path(upload_dir, raw_name)
         if not target_path or not clean_name:
+            failed_count += 1
+            continue
+        clean_parent = os.path.dirname(clean_name).replace("\\", "/")
+        if clean_parent != current_dir:
             failed_count += 1
             continue
         if not os.path.exists(target_path):
@@ -3336,15 +3490,13 @@ def delete_files():
             failed_count += 1
 
     if deleted_count == 0:
-        return redirect(url_for("index", msg="Nie udalo sie usunac wybranych plikow"))
+        return redirect_to_index("Nie udalo sie usunac wybranych plikow", current_dir)
     if failed_count > 0:
-        return redirect(
-            url_for(
-                "index",
-                msg=f"Usunieto plikow: {deleted_count}. Bledy podczas kasowania: {failed_count}.",
-            )
+        return redirect_to_index(
+            f"Usunieto plikow: {deleted_count}. Bledy podczas kasowania: {failed_count}.",
+            current_dir,
         )
-    return redirect(url_for("index", msg=f"Usunieto plikow: {deleted_count}."))
+    return redirect_to_index(f"Usunieto plikow: {deleted_count}.", current_dir)
 
 @app.route("/restart", methods=["POST"])
 def restart():
