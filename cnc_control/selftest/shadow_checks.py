@@ -129,7 +129,7 @@ def _check_mount_ro(
         [
             "mount",
             "-o",
-            "ro,loop",
+            "ro,loop,X-mount.mkdir",
             str(image_path),
             str(validate_root),
         ]
