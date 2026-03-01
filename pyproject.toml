@@ -13,6 +13,9 @@ dependencies = [
     "Werkzeug>=2.2,<4",
 ]
 
+[project.scripts]
+cnc-selftest = "cnc_control.selftest.cli:main"
+
 [project.optional-dependencies]
 rpi = [
     "rpi-ws281x>=5.0.0",
@@ -20,6 +23,9 @@ rpi = [
 
 [tool.setuptools]
 py-modules = ["led_status", "led_status_cli"]
+
+[tool.setuptools.packages.find]
+include = ["cnc_control*"]
 
 [tool.setuptools_scm]
 tag_regex = "^(?:v)?(?P<version>\\d+\\.\\d+\\.\\d+)$"

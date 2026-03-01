@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import platform
-import re
 import shlex
 import shutil
 import socket
@@ -22,6 +21,8 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urljoin, urlparse
+
+from cnc_control.selftest.core import run_selftest
 
 # PL: Zapewnia wpis modułu dla loaderow testowych, ktore nie rejestruja modułu w sys.modules.
 # EN: Ensures module registration for test loaders that do not register it in sys.modules.
@@ -533,28 +534,6 @@ class Runner:
                     f"Wymagana usługa systemd nie jest aktywna: {service_name} -> {state or 'unknown'}"
                 )
 
-        journal_result = self.ssh_exec(
-            "journalctl -p 3 -n 20 --no-pager",
-            check=False,
-        )
-        if journal_result["exit_status"] != 0:
-            fallback_journal = self.ssh_exec(
-                "sudo -n journalctl -p 3 -n 20 --no-pager",
-                check=True,
-            )
-            journal_output = fallback_journal["stdout"]
-        else:
-            journal_output = journal_result["stdout"]
-
-        journal_lines = [line for line in journal_output.splitlines() if line.strip()]
-        journal_cnc_lines = self.filter_cnc_journal_lines(journal_lines)
-        if journal_cnc_lines:
-            journal_preview = "\n".join(journal_cnc_lines[-5:])
-            raise RuntimeError(
-                "Wykryto wpisy ERROR/CRITICAL zwiazane z CNC w journalctl -p 3 -n 20:\n"
-                f"{journal_preview}"
-            )
-
         refresh_details: dict[str, Any] = {
             "status": "ok",
             "repo": {
@@ -570,18 +549,32 @@ class Runner:
                 "path": venv_dir,
             },
             "systemd": systemd_states,
-            "journal_priority_le_3_entries_total": len(journal_lines),
-            "journal_priority_le_3_entries_cnc": len(journal_cnc_lines),
         }
         if isinstance(selftest_payload, dict):
+            selftest_summary = {
+                "status": selftest_payload.get("status"),
+                "critical": selftest_payload.get("critical"),
+                "warnings": selftest_payload.get("warnings"),
+                "system_noise": selftest_payload.get("system_noise"),
+            }
+            journal_section = selftest_payload.get("details")
+            journal_total = None
+            journal_critical = None
+            if isinstance(journal_section, dict):
+                journal_payload = journal_section.get("journal")
+                if isinstance(journal_payload, dict):
+                    journal_total = len(journal_payload.get("checks") or [])
+                    journal_critical = int(journal_payload.get("critical") or 0)
             refresh_details["selftest"] = {
                 "format": "json",
-                "summary": selftest_payload.get("summary"),
-                "result": selftest_payload.get("result"),
+                "summary": selftest_summary,
+                "result": selftest_payload,
                 "attempts": selftest_report["attempts"],
                 "auto_repair_runtime_lun": selftest_report["auto_repair_runtime_lun"],
                 "auto_repair_details": selftest_report.get("auto_repair_details"),
             }
+            refresh_details["journal_priority_le_3_entries_total"] = journal_total
+            refresh_details["journal_priority_le_3_entries_cnc"] = journal_critical
         else:
             refresh_details["selftest"] = {
                 "format": "text",
@@ -655,6 +648,16 @@ class Runner:
         repo_path: str,
         venv_dir: str,
     ) -> tuple[dict[str, Any], Any]:
+        if self.is_local_host_target():
+            local_result = run_selftest()
+            payload = local_result.to_dict()
+            wrapped_result = {
+                "stdout": json.dumps(payload, ensure_ascii=True),
+                "stderr": "",
+                "exit_status": 1 if local_result.critical > 0 else 0,
+            }
+            return wrapped_result, payload
+
         selftest_command = (
             "set -euo pipefail\n"
             f"repo_path={shlex.quote(repo_path)}\n"
@@ -665,7 +668,13 @@ class Runner:
             "  exit 1\n"
             "fi\n"
             ". \"$venv_dir/bin/activate\"\n"
-            "./tools/cnc_selftest.sh --json\n"
+            "python3 - <<'PY'\n"
+            "import json\n"
+            "from cnc_control.selftest.core import run_selftest\n"
+            "result = run_selftest()\n"
+            "print(json.dumps(result.to_dict(), ensure_ascii=True))\n"
+            "raise SystemExit(1 if result.critical > 0 else 0)\n"
+            "PY\n"
         )
         result = self.ssh_exec(
             selftest_command,
@@ -675,13 +684,27 @@ class Runner:
         payload = self.parse_json_if_possible(result["stdout"])
         return result, payload
 
+    def is_local_host_target(self) -> bool:
+        host = (self.args.host or "").strip().casefold()
+        local_aliases = {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+            socket.gethostname().casefold(),
+            socket.getfqdn().casefold(),
+        }
+        return host in local_aliases
+
     def is_runtime_lun_mismatch_failure(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
             return False
-        runtime = payload.get("runtime")
-        if not isinstance(runtime, dict):
+        details = payload.get("details")
+        if not isinstance(details, dict):
             return False
-        checks = runtime.get("checks")
+        shadow_section = details.get("shadow")
+        if not isinstance(shadow_section, dict):
+            return False
+        checks = shadow_section.get("checks")
         if not isinstance(checks, list):
             return False
         mismatch_present = False
@@ -695,9 +718,8 @@ class Runner:
                 break
         if not mismatch_present:
             return False
-        summary = payload.get("summary")
-        if isinstance(summary, dict):
-            critical = int(summary.get("critical") or 0)
+        critical = int(payload.get("critical") or 0)
+        if critical >= 0:
             return critical <= 1
         return True
 
@@ -764,14 +786,12 @@ class Runner:
         ]
 
         if isinstance(payload, dict):
-            summary = payload.get("summary")
-            if isinstance(summary, dict):
-                parts.append(
-                    "summary="
-                    f"status:{summary.get('status')}, "
-                    f"critical:{summary.get('critical')}, "
-                    f"warnings:{summary.get('warnings')}"
-                )
+            parts.append(
+                "summary="
+                f"status:{payload.get('status')}, "
+                f"critical:{payload.get('critical')}, "
+                f"warnings:{payload.get('warnings')}"
+            )
             failed_checks = self.extract_failed_check_messages(payload, limit=3)
             if failed_checks:
                 parts.append("failed_checks=" + " | ".join(failed_checks))
@@ -791,9 +811,10 @@ class Runner:
 
     def extract_failed_check_messages(self, payload: dict[str, Any], limit: int) -> list[str]:
         messages: list[str] = []
-        for section_name, section_payload in payload.items():
-            if section_name == "summary":
-                continue
+        details = payload.get("details")
+        if not isinstance(details, dict):
+            return messages
+        for section_name, section_payload in details.items():
             if not isinstance(section_payload, dict):
                 continue
             checks = section_payload.get("checks")
@@ -811,33 +832,6 @@ class Runner:
                 if len(messages) >= limit:
                     return messages
         return messages
-
-    def filter_cnc_journal_lines(self, journal_lines: list[str]) -> list[str]:
-        include_pattern = re.compile(
-            r"(cnc-(usb|webui|led)\.service|cnc-control|shadow|shadow_usb_export|g_mass_storage|dwc2)",
-            flags=re.IGNORECASE,
-        )
-        include_usb_message_pattern = re.compile(
-            r"\busb(?:[_ -]gadget|[_ -]mass[_ -]storage)?\b",
-            flags=re.IGNORECASE,
-        )
-        noise_pattern = re.compile(
-            r"(bluetoothd|wpa_supplicant|dhcpcd|networkmanager|avahi-daemon|modemmanager|systemd-resolved)",
-            flags=re.IGNORECASE,
-        )
-
-        filtered: list[str] = []
-        for line in journal_lines:
-            if noise_pattern.search(line):
-                continue
-            if include_pattern.search(line):
-                filtered.append(line)
-                continue
-            message = line.split(": ", 1)[1] if ": " in line else line
-            if include_usb_message_pattern.search(message):
-                filtered.append(line)
-
-        return filtered
 
     def parse_json_if_possible(self, content: str) -> Any:
         text = content.strip()
