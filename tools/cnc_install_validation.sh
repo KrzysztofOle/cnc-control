@@ -172,14 +172,16 @@ else
 fi
 
 if [ -f "${TARGET_MARKER}" ]; then
+    record_check "PASS" "Marker targetu (.cnc_target) istnieje" "${TARGET_MARKER}"
     marker_value="$(tr -d '\r\n\t ' < "${TARGET_MARKER}" | tr '[:upper:]' '[:lower:]')"
     if [ "${marker_value}" = "rpi" ]; then
-        record_check "PASS" "Marker targetu" "${TARGET_MARKER}=rpi"
+        record_check "PASS" "Marker targetu (.cnc_target)=rpi" "${TARGET_MARKER}=rpi"
     else
-        record_check "FAIL" "Marker targetu" "${TARGET_MARKER}=${marker_value:-<pusty>}, oczekiwano rpi"
+        record_check "FAIL" "Marker targetu (.cnc_target)=rpi" "${TARGET_MARKER}=${marker_value:-<pusty>}, oczekiwano rpi"
     fi
 else
-    record_check "FAIL" "Marker targetu" "Brak pliku: ${TARGET_MARKER}"
+    record_check "FAIL" "Marker targetu (.cnc_target) istnieje" "Brak pliku: ${TARGET_MARKER}"
+    record_check "FAIL" "Marker targetu (.cnc_target)=rpi" "Brak pliku: ${TARGET_MARKER}"
 fi
 
 if [ "${parse_env_ok}" = true ]; then

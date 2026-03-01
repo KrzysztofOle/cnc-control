@@ -344,18 +344,22 @@ if [ -z "${PYTHON3_BIN}" ]; then
 fi
 
 echo "[5/9] Konfiguracja srodowiska Python (venv + pyproject)"
-run_as_install_user "${PYTHON3_BIN}" -m venv "${VENV_DIR}"
-VENV_PIP="${VENV_DIR}/bin/pip"
-if [ ! -x "${VENV_PIP}" ]; then
-    echo "Brak pip w srodowisku venv: ${VENV_PIP}"
+BOOTSTRAP_ENV_SCRIPT="${REPO_DIR}/tools/bootstrap_env.py"
+if [ ! -f "${BOOTSTRAP_ENV_SCRIPT}" ]; then
+    echo "[ERROR] Brak skryptu bootstrap_env.py: ${BOOTSTRAP_ENV_SCRIPT}"
     exit 1
 fi
-run_as_install_user "${VENV_PIP}" install --upgrade pip
-if run_as_install_user "${VENV_PIP}" install --upgrade --editable "${REPO_DIR}[rpi]"; then
-    echo "[INFO] Zainstalowano zaleznosci bazowe i LED z pyproject.toml."
-else
-    echo "[WARN] Instalacja dodatku LED nieudana. Instalacja samych zaleznosci bazowych."
-    run_as_install_user "${VENV_PIP}" install --upgrade --editable "${REPO_DIR}"
+
+if ! run_as_install_user "${PYTHON3_BIN}" "${BOOTSTRAP_ENV_SCRIPT}" --target rpi --venv-dir "${VENV_DIR}"; then
+    echo "[ERROR] Nie udalo sie skonfigurowac srodowiska przez bootstrap_env.py (--target rpi)."
+    exit 1
+fi
+
+TARGET_MARKER="${VENV_DIR}/.cnc_target"
+if [ ! -f "${TARGET_MARKER}" ]; then
+    echo "[ERROR] Brak wymaganego markera targetu: ${TARGET_MARKER}"
+    echo "[ERROR] Oczekiwano pliku po uruchomieniu: python3 tools/bootstrap_env.py --target rpi"
+    exit 1
 fi
 
 echo "[6/9] Instalacja konfiguracji systemowej cnc-control"
