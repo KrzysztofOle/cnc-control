@@ -31,6 +31,20 @@ Optionally, you can set the installation user explicitly:
 CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 ```
 
+## Installation from another branch
+
+```bash
+cd ~
+wget https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+./bootstrap_cnc.sh --branch <branch-name>
+```
+
+Branch selection priority:
+- `--branch <branch-name>`
+- `CNC_GIT_BRANCH=<branch-name>`
+- default `main`
+
 The script prepares the system, clones/updates the repository, creates `.venv`,
 installs dependencies, and configures systemd services.
 

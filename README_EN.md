@@ -109,6 +109,20 @@ Optionally, you can set the installation user explicitly:
 CNC_INSTALL_USER=$USER ./bootstrap_cnc.sh
 ```
 
+### Installation from another branch
+
+```bash
+cd ~
+wget https://raw.githubusercontent.com/KrzysztofOle/cnc-control/main/tools/bootstrap_cnc.sh
+chmod +x bootstrap_cnc.sh
+./bootstrap_cnc.sh --branch <branch-name>
+```
+
+Branch selection priority:
+- `--branch <branch-name>`
+- `CNC_GIT_BRANCH=<branch-name>`
+- default `main`
+
 The script automatically:
 - updates the system (`apt update/upgrade`),
 - installs SHADOW runtime packages (`dosfstools`, `mtools`, `util-linux`, `inotify-tools`, `kmod`, `rsync`),

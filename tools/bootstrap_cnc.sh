@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO_URL_DEFAULT="https://github.com/KrzysztofOle/cnc-control.git"
+GIT_BRANCH_DEFAULT="main"
 PREFERRED_USER_DEFAULT="andrzej"
 APT_PACKAGES=(
     git
@@ -21,6 +22,36 @@ APT_PACKAGES=(
     kmod
     rsync
 )
+
+SELECTED_BRANCH="${CNC_GIT_BRANCH:-${GIT_BRANCH_DEFAULT}}"
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --branch)
+                if [ "$#" -lt 2 ] || [ -z "${2}" ]; then
+                    echo "Brak wartosci dla opcji --branch."
+                    exit 1
+                fi
+                SELECTED_BRANCH="$2"
+                shift 2
+                ;;
+            --branch=*)
+                SELECTED_BRANCH="${1#*=}"
+                if [ -z "${SELECTED_BRANCH}" ]; then
+                    echo "Brak wartosci dla opcji --branch."
+                    exit 1
+                fi
+                shift
+                ;;
+            *)
+                echo "Nieznana opcja: $1"
+                echo "Uzycie: $0 [--branch <nazwa-galezi>]"
+                exit 1
+                ;;
+        esac
+    done
+}
 
 run_as_root() {
     if [ "${EUID}" -eq 0 ]; then
@@ -138,6 +169,7 @@ validate_shadow_env() {
 }
 
 echo "=== CNC Bootstrap Start ==="
+parse_args "$@"
 
 if ! command -v apt-get >/dev/null 2>&1; then
     echo "Ten skrypt wymaga apt-get (Debian/Raspberry Pi OS)."
@@ -159,6 +191,7 @@ fi
 REPO_URL="${CNC_REPO_URL:-${REPO_URL_DEFAULT}}"
 REPO_DIR="${CNC_REPO_DIR:-${INSTALL_HOME}/cnc-control}"
 VENV_DIR="${CNC_VENV_DIR:-${REPO_DIR}/.venv}"
+echo "Using Git branch: ${SELECTED_BRANCH}"
 
 echo "[1/9] Aktualizacja systemu"
 run_as_root apt-get update
@@ -175,13 +208,21 @@ echo "[4/9] Klonowanie lub aktualizacja repozytorium (${REPO_URL})"
 run_as_install_user mkdir -p "$(dirname "${REPO_DIR}")"
 if [ -d "${REPO_DIR}/.git" ]; then
     run_as_install_user git -C "${REPO_DIR}" remote set-url origin "${REPO_URL}"
-    run_as_install_user git -C "${REPO_DIR}" fetch --all --prune
+    run_as_install_user git -C "${REPO_DIR}" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+    run_as_install_user git -C "${REPO_DIR}" fetch origin
+    if ! run_as_install_user git -C "${REPO_DIR}" checkout "${SELECTED_BRANCH}"; then
+        echo "[ERROR] Nie udalo sie przelaczyc na galez '${SELECTED_BRANCH}'."
+        exit 1
+    fi
     run_as_install_user git -C "${REPO_DIR}" pull --ff-only
 elif [ -d "${REPO_DIR}" ] && [ -n "$(ls -A "${REPO_DIR}")" ]; then
     echo "Katalog ${REPO_DIR} istnieje i nie jest repozytorium git. Przerwano."
     exit 1
 else
-    run_as_install_user git clone "${REPO_URL}" "${REPO_DIR}"
+    if ! run_as_install_user git clone --branch "${SELECTED_BRANCH}" --single-branch "${REPO_URL}" "${REPO_DIR}"; then
+        echo "[ERROR] Nie udalo sie sklonowac galezi '${SELECTED_BRANCH}' z ${REPO_URL}."
+        exit 1
+    fi
 fi
 
 PYTHON3_BIN="$(command -v python3 || true)"
