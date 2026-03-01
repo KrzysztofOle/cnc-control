@@ -1251,6 +1251,7 @@ check_system_cnc_journal_errors() {
     local compact=""
     local noise_compact=""
     local line=""
+    local journal_tmp_file=""
     local cnc_pattern='cnc-(usb|webui|led)\.service|cnc-control|shadow|shadow_usb_export|g_mass_storage|dwc2|usb(_gadget|[[:space:]-]gadget|[[:space:]-]mass[[:space:]-]storage)'
     local noise_pattern='bluetoothd|wpa_supplicant|dhcpcd|networkmanager|avahi-daemon|modemmanager|systemd-resolved'
 
@@ -1267,10 +1268,14 @@ check_system_cnc_journal_errors() {
     fi
 
     if command_available "python3"; then
-        parsed="$(printf '%s\n' "${output}" | python3 <<'PY'
+        journal_tmp_file="$(mktemp)"
+        printf '%s\n' "${output}" > "${journal_tmp_file}"
+        parsed="$(python3 - "${journal_tmp_file}" <<'PY'
 import json
 import re
 import sys
+
+journal_path = sys.argv[1]
 
 project_re = re.compile(
     r"(cnc-(usb|webui|led)\.service|cnc-control|shadow|shadow_usb_export|g_mass_storage|dwc2)",
@@ -1285,28 +1290,29 @@ noise_re = re.compile(
 relevant = []
 noise = []
 
-for raw_line in sys.stdin:
-    raw_line = raw_line.strip()
-    if not raw_line:
-        continue
-    try:
-        payload = json.loads(raw_line)
-    except json.JSONDecodeError:
-        continue
+with open(journal_path, "r", encoding="utf-8", errors="replace") as handle:
+    for raw_line in handle:
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
 
-    message = str(payload.get("MESSAGE", "")).strip()
-    unit = str(payload.get("_SYSTEMD_UNIT") or payload.get("UNIT") or "").strip()
-    identifier = str(payload.get("SYSLOG_IDENTIFIER") or payload.get("_COMM") or "").strip()
-    source = unit or identifier or "journal"
-    combined = f"{unit} {identifier} {message}".strip()
-    entry = f"{source}: {message}" if message else source
+        message = str(payload.get("MESSAGE", "")).strip()
+        unit = str(payload.get("_SYSTEMD_UNIT") or payload.get("UNIT") or "").strip()
+        identifier = str(payload.get("SYSLOG_IDENTIFIER") or payload.get("_COMM") or "").strip()
+        source = unit or identifier or "journal"
+        combined = f"{unit} {identifier} {message}".strip()
+        entry = f"{source}: {message}" if message else source
 
-    if noise_re.search(combined):
-        noise.append(entry)
-        continue
+        if noise_re.search(combined):
+            noise.append(entry)
+            continue
 
-    if project_re.search(combined) or usb_re.search(message):
-        relevant.append(entry)
+        if project_re.search(combined) or usb_re.search(message):
+            relevant.append(entry)
 
 
 def dedupe(items: list[str]) -> list[str]:
@@ -1328,6 +1334,7 @@ for item in dedupe(noise)[:80]:
     print(item)
 PY
 )"
+        rm -f "${journal_tmp_file}"
         filtered="$(printf '%s\n' "${parsed}" | awk '
             /^===RELEVANT===$/ { mode="relevant"; next }
             /^===NOISE===$/ { mode="noise"; next }
