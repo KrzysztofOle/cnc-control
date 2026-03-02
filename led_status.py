@@ -9,7 +9,8 @@ from enum import Enum, auto
 from typing import Dict, Optional, Tuple
 
 LED_PIN = 18
-LED_COUNT = 3
+LED_COUNT = 6
+ACTIVE_LED_INDEXES = frozenset({0, 1, 4, 5})
 BRIGHTNESS = 0.3
 MODE_FILE_PATH = os.environ.get("CNC_LED_MODE_FILE", "/tmp/cnc_led_mode")
 LOCK_FILE_PATH = os.environ.get("CNC_LED_LOCK_FILE", "/tmp/cnc_led.lock")
@@ -98,12 +99,14 @@ class _Ws281xBackend:
         self._strip.begin()
 
     def show(self, enabled: bool, rgb: Tuple[int, int, int]) -> None:
+        off_color = self._color(0, 0, 0)
         if enabled:
             red, green, blue = rgb
-            color = self._color(red, green, blue)
+            on_color = self._color(red, green, blue)
         else:
-            color = self._color(0, 0, 0)
+            on_color = off_color
         for index in range(LED_COUNT):
+            color = on_color if index in ACTIVE_LED_INDEXES else off_color
             self._strip.setPixelColor(index, color)
         self._strip.show()
 
